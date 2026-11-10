@@ -103,13 +103,48 @@ struct Pilot {
     Vec position;
     Vec goal;
     Vec velocity{0, 0, 0, 0};
-    float heading = 0;
+    float heading = 0;     // direction of travel, from the actual velocity
+    float modelYaw = 0;    // model facing, turned towards heading at a limited rate
+    float pitch = 0;       // flight pitch, engine sign: positive = descending
+    float bank = 0;        // sideways lean while turning
     float cameraYaw = 0;
     float radius = 0;
     float ceiling = 0;
     float floor = 0;
     int motion = -1;
 };
+
+constexpr float Tau = 6.2831853f;
+constexpr float Deg36 = 0.62831853f;
+
+// Same rule as BtlMove_TurnModelYaw: step = |delta| * rate, clamped, never overshooting.
+float TurnToward(float current, float target, float rate, float minStep, float maxStep) {
+    const float delta = std::remainder(target - current, Tau);
+    float step = std::clamp(std::fabs(delta) * rate, minStep, maxStep);
+    step = std::min(step, std::fabs(delta));
+    return std::remainder(current + std::copysign(step, delta), Tau);
+}
+
+Vec QuatAxisAngle(float x, float y, float z, float angle) {
+    const float half = angle * 0.5f;
+    const float sine = std::sin(half);
+    return {x * sine, y * sine, z * sine, std::cos(half)};
+}
+
+Vec QuatMul(const Vec& a, const Vec& b) {
+    return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+            a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+
+// Mirrors BtlChar_UpdateLean: the object's extra node-2 rotation is built from
+// angles (-leanX, 0, leanZ), which is what makes the body tilt in flight.
+void SetLean(void* avatar, float leanX, float leanZ) {
+    const Vec qx = QuatAxisAngle(1.0f, 0.0f, 0.0f, -leanX);
+    const Vec qz = QuatAxisAngle(0.0f, 0.0f, 1.0f, leanZ);
+    Field<Vec>(avatar, 0xD20) = QuatMul(qx, qz);
+}
 
 float GroundY(float x, float z, float fallback) {
     const Vec sample{x, -700.0f, z};
@@ -130,9 +165,15 @@ void SetPilotPose(Pilot& pilot, void* fighter, void* avatar, float ground) {
         pilot.motion = motion;
     }
 
-    const Vec rotation{0, pilot.heading, 0};
+    const Vec rotation{0, pilot.modelYaw, 0};
     // The engine's placement function updates both the current and prior model roots.
     Game(rva::BtlChar_Place, fighter, &pilot.position, &rotation, 0);
+    // Keep the pose lean fields in sync with the object quaternion, as BtlChar_UpdateLean does.
+    const float leanX = std::clamp(pilot.pitch, -1.2f, 1.2f) * 0.72f;
+    const float leanZ = std::clamp(pilot.bank, -0.6f, 0.6f);
+    Field<float>(fighter, 0xB0) = leanX;
+    Field<float>(fighter, 0xB4) = leanZ;
+    SetLean(avatar, leanX, leanZ);
     Game(rva::BtlObjXf_Update, avatar);
 
     const Vec look{pilot.position.x, pilot.position.y - 16.0f, pilot.position.z};
@@ -152,7 +193,7 @@ float Move(Pilot& pilot, void* pad) {
     const float forward = std::clamp(-Field<float>(pad, 0x1A8) + button(Up) - button(Down), -1.0f, 1.0f);
     const float strafe = Field<float>(pad, 0x1A4);
     const float turn = std::clamp(Field<float>(pad, 0x1AC) + button(Right) - button(Left), -1.0f, 1.0f);
-    pilot.cameraYaw = std::remainder(pilot.cameraYaw + turn * 0.055f, 6.2831853f);
+    pilot.cameraYaw = std::remainder(pilot.cameraYaw + turn * 0.055f, Tau);
     const float sine = std::sin(pilot.cameraYaw);
     const float cosine = std::cos(pilot.cameraYaw);
     const float rate = (held & Boost) ? 16.0f : 7.5f;
@@ -164,31 +205,97 @@ float Move(Pilot& pilot, void* pad) {
     pilot.velocity.y += (desired.y - pilot.velocity.y) * 0.25f;
     pilot.velocity.z += (desired.z - pilot.velocity.z) * 0.25f;
 
+    // Keep the camera trailing the model while the player is not turning it,
+    // with the gentle rate the engine's free camera uses.
+    const float horizontalSpeed = std::hypot(pilot.velocity.x, pilot.velocity.z);
+    if (std::fabs(turn) < 0.05f && horizontalSpeed > 1.0f) {
+        const float delta = std::remainder(pilot.modelYaw - pilot.cameraYaw, Tau);
+        const float follow = std::min(std::fabs(std::sin(delta)) * 0.05f, 0.0333f);
+        const float step = std::min(follow, std::fabs(delta));
+        pilot.cameraYaw = std::remainder(pilot.cameraYaw + std::copysign(step, delta), Tau);
+    }
+
+    // Face the direction the character is actually flying; while the velocity is
+    // still building up, follow the requested direction so the turn starts cleanly.
+    float wantedHeading = pilot.heading;
+    if (horizontalSpeed > 0.5f) {
+        wantedHeading = std::atan2(pilot.velocity.x, pilot.velocity.z);
+    } else if (std::hypot(desired.x, desired.z) > 0.1f) {
+        wantedHeading = std::atan2(desired.x, desired.z);
+    }
+    const float previousYaw = pilot.modelYaw;
+    pilot.heading = wantedHeading;
+    pilot.modelYaw = TurnToward(pilot.modelYaw, pilot.heading, 0.3f, 0.0314f, Deg36);
+
+    // Engine pitch: positive when descending (forward direction y = -sin(pitch)).
+    const float verticalSpeed = pilot.velocity.y;
+    const float flightSpeed = std::hypot(horizontalSpeed, verticalSpeed);
+    const float wantedPitch = flightSpeed > 1.0f
+        ? std::atan2(-verticalSpeed, horizontalSpeed)
+        : 0.0f;
+    pilot.pitch = TurnToward(pilot.pitch, wantedPitch, 0.3f, 0.0f, Deg36);
+
+    // Lean into the turn; the model yaw error gives the yaw rate for this frame.
+    const float yawError = std::remainder(pilot.modelYaw - previousYaw, Tau);
+    const float wantedBank = std::clamp(-yawError * 0.6f, -0.55f, 0.55f);
+    pilot.bank += (wantedBank - pilot.bank) * 0.15f;
+
     Vec next{pilot.position.x + pilot.velocity.x,
              pilot.position.y + pilot.velocity.y,
              pilot.position.z + pilot.velocity.z};
     const float radial = std::hypot(next.x, next.z);
     if (radial > pilot.radius) {
-        next.x *= pilot.radius / radial;
-        next.z *= pilot.radius / radial;
+        const float scale = pilot.radius / radial;
+        next.x *= scale;
+        next.z *= scale;
+        // Drop the outward component so the character slides along the boundary.
+        const float nx = next.x / pilot.radius;
+        const float nz = next.z / pilot.radius;
+        const float outward = pilot.velocity.x * nx + pilot.velocity.z * nz;
+        if (outward > 0.0f) {
+            pilot.velocity.x -= outward * nx;
+            pilot.velocity.z -= outward * nz;
+        }
     }
-    float ground = GroundY(next.x, next.z, pilot.floor);
-    next.y = std::clamp(next.y, pilot.ceiling, std::max(pilot.ceiling, std::min(pilot.floor, ground)));
-    const Vec from{pilot.position.x, pilot.position.y - 25.0f, pilot.position.z};
-    const Vec to{next.x, next.y - 25.0f, next.z};
-    Vec contact;
-    if (!Game<int>(rva::BtlCam_TraceStage, &contact, &to, &from,
-                   static_cast<float*>(nullptr), static_cast<int*>(nullptr))) {
+    const float groundNow = GroundY(pilot.position.x, pilot.position.z, pilot.floor);
+    const float lowest = std::max(pilot.ceiling, std::min(pilot.floor, groundNow));
+    next.y = std::clamp(next.y, pilot.ceiling, lowest);
+
+    const auto blocked = [&pilot](const Vec& target) {
+        const Vec from{pilot.position.x, pilot.position.y - 25.0f, pilot.position.z};
+        const Vec to{target.x, target.y - 25.0f, target.z};
+        Vec contact;
+        return Game<int>(rva::BtlCam_TraceStage, &contact, &to, &from,
+                         static_cast<float*>(nullptr), static_cast<int*>(nullptr)) != 0;
+    };
+
+    if (!blocked(next)) {
         pilot.position = next;
     } else {
-        pilot.velocity = {0, 0, 0, 0};
-        ground = GroundY(pilot.position.x, pilot.position.z, pilot.floor);
+        // Slide along blocked surfaces instead of losing all momentum.
+        Vec attempt = pilot.position;
+        const Vec tryX{attempt.x + pilot.velocity.x, attempt.y, attempt.z};
+        if (!blocked(tryX)) {
+            attempt.x = tryX.x;
+        } else {
+            pilot.velocity.x = 0.0f;
+        }
+        const Vec tryZ{attempt.x, attempt.y, attempt.z + pilot.velocity.z};
+        if (!blocked(tryZ)) {
+            attempt.z = tryZ.z;
+        } else {
+            pilot.velocity.z = 0.0f;
+        }
+        const float wantedY = std::clamp(attempt.y + pilot.velocity.y, pilot.ceiling, lowest);
+        const Vec tryY{attempt.x, wantedY, attempt.z};
+        if (!blocked(tryY)) {
+            attempt.y = wantedY;
+        } else {
+            pilot.velocity.y = 0.0f;
+        }
+        pilot.position = attempt;
     }
-    if (std::hypot(desired.x, desired.z) > 0.1f) {
-        const float wanted = std::atan2(desired.x, desired.z);
-        pilot.heading += std::remainder(wanted - pilot.heading, 6.2831853f) * 0.22f;
-    }
-    return ground;
+    return GroundY(pilot.position.x, pilot.position.z, pilot.floor);
 }
 
 void DrawMarker(const Pilot& pilot, char* label) {
@@ -292,7 +399,7 @@ bool Explore() {
     }
     pilot.position.y = pilot.goal.y = std::max(pilot.ceiling, highestGround - 90.0f);
     if (Distance(pilot.position, pilot.goal) < 90.0f) return false;
-    pilot.heading = pilot.cameraYaw = headingToGoal;
+    pilot.heading = pilot.modelYaw = pilot.cameraYaw = headingToGoal;
 
     // Font_PrintAsciiAt receives a PS2-style 32-bit string address.
     auto* overlayText = Game<char*>(rva::Port_LowAlloc, std::size_t{128});
