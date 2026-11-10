@@ -98,6 +98,7 @@ constexpr std::uint32_t Up = 1 << 3;
 constexpr std::uint32_t Boost = 1 << 14;
 constexpr std::uint32_t Ascend = 1 << 16;
 constexpr std::uint32_t Descend = 1 << 17;
+constexpr std::uint32_t Select = 1 << 23; // SELECT: cycle camera distance preset
 
 struct Pilot {
     Vec position;
@@ -108,10 +109,14 @@ struct Pilot {
     float pitch = 0;       // flight pitch, engine sign: positive = descending
     float bank = 0;        // sideways lean while turning
     float cameraYaw = 0;
+    int cameraDistMode = 0; // BT2-style distance preset cycled with SELECT (0..2)
+    float cameraDist = 0;   // smoothed distance to the target pose
     float radius = 0;
     float ceiling = 0;
     float floor = 0;
     int motion = -1;
+    bool arrived = false;   // reached point C, playing arrival animation
+    int arriveFrames = 0;
 };
 
 constexpr float Tau = 6.2831853f;
@@ -188,9 +193,26 @@ void SetPilotPose(Pilot& pilot, void* fighter, void* avatar, float ground) {
     Game(rva::BtlObjXf_Update, avatar);
 
     const Vec look{pilot.position.x, pilot.position.y - 12.0f, pilot.position.z};
-    const Vec desired{pilot.position.x - std::sin(pilot.cameraYaw) * 115.0f,
-                      pilot.position.y - 42.0f,
-                      pilot.position.z - std::cos(pilot.cameraYaw) * 115.0f};
+
+    // BT2-style camera: 3 distance presets cycled with SELECT, interpolated smoothly.
+    // dist = character height * 0.5 + 1.0 (min 10); offset scales with dist.
+    const float charHeight = 10.0f * 1.6f; // avatar scale 1.6
+    const float baseDist = std::max(charHeight * 0.5f + 1.0f, 10.0f);
+    float offsetY = 0.0f, offsetZ = 0.0f;
+    switch (pilot.cameraDistMode) {
+        case 1: offsetY = -baseDist * 1.5f; offsetZ = -baseDist * 2.8f; break;
+        case 2: offsetY = -baseDist * 2.0f; offsetZ = -baseDist * 3.3f; break;
+        case 0: default: offsetY = -baseDist * 1.2f; offsetZ = -baseDist * 2.4f; break;
+    }
+    // Smoothly interpolate camera distance toward the preset (BT2 ChrCam_GetRate style).
+    const float wantedDist = std::hypot(offsetY, offsetZ);
+    pilot.cameraDist += (wantedDist - pilot.cameraDist) * 0.1f;
+    const float scale = pilot.cameraDist / wantedDist;
+    const Vec desired{
+        pilot.position.x + std::sin(pilot.cameraYaw) * (offsetZ * scale),
+        pilot.position.y + offsetY * scale,
+        pilot.position.z + std::cos(pilot.cameraYaw) * (offsetZ * scale),
+    };
     Vec& eye = Field<Vec>(fighter, 0x430);
     Game<int>(rva::BtlCam_TraceStage, &eye, &desired, &look,
               static_cast<float*>(nullptr), static_cast<int*>(nullptr));
@@ -200,17 +222,28 @@ void SetPilotPose(Pilot& pilot, void* fighter, void* avatar, float ground) {
 
 float Move(Pilot& pilot, void* pad) {
     const auto held = Field<std::uint32_t>(pad, 0x188);
-    const auto button = [held](std::uint32_t mask) { return (held & mask) ? 1.0f : 0.0f; };
-    const float forward = std::clamp(-Field<float>(pad, 0x1A8) + button(Up) - button(Down), -1.0f, 1.0f);
+    static std::uint32_t lastHeld = 0;
+    const auto btn = [held](std::uint32_t mask) { return (held & mask) ? 1.0f : 0.0f; };
+    const bool selPressed = (held & Select) && !(lastHeld & Select);
+    lastHeld = held;
+
+    const float forward = std::clamp(-Field<float>(pad, 0x1A8) + btn(Up) - btn(Down), -1.0f, 1.0f);
     const float strafe = Field<float>(pad, 0x1A4);
-    const float turn = std::clamp(Field<float>(pad, 0x1AC) + button(Right) - button(Left), -1.0f, 1.0f);
+    const float turn = std::clamp(Field<float>(pad, 0x1AC) + btn(Right) - btn(Left), -1.0f, 1.0f);
     pilot.cameraYaw = std::remainder(pilot.cameraYaw + turn * 0.055f, Tau);
+
+    // Cycle camera distance preset with SELECT (BT2 ChrCam_UpdateInput).
+    if (selPressed) {
+        pilot.cameraDistMode = (pilot.cameraDistMode + 1) % 3;
+    }
+
     const float sine = std::sin(pilot.cameraYaw);
     const float cosine = std::cos(pilot.cameraYaw);
-    const float rate = (held & Boost) ? 16.0f : 7.5f;
+    // BT2 turbo: faster than normal cruise (warp uses 500 km/h).
+    const float rate = (held & Boost) ? 22.0f : 8.0f;
     const float diagonal = std::max(1.0f, std::hypot(forward, strafe));
     const Vec desired{(sine * forward + cosine * strafe) * rate / diagonal,
-                      (button(Descend) - button(Ascend)) * 6.0f,
+                      (btn(Descend) - btn(Ascend)) * 6.0f,
                       (cosine * forward - sine * strafe) * rate / diagonal, 0};
     pilot.velocity.x += (desired.x - pilot.velocity.x) * 0.25f;
     pilot.velocity.y += (desired.y - pilot.velocity.y) * 0.25f;
@@ -240,7 +273,7 @@ float Move(Pilot& pilot, void* pad) {
     // Pitch basado en la entrada de subir/bajar (no en la velocidad vertical,
     // que cambia cada frame por el suavizado y provoca el balanceo del cuerpo).
     // Convención del motor: pitch positivo = nariz hacia abajo (descendiendo).
-    const float verticalInput = button(Descend) - button(Ascend);
+    const float verticalInput = btn(Descend) - btn(Ascend);
     const float wantedPitch = verticalInput * 0.45f;
     pilot.pitch = TurnToward(pilot.pitch, wantedPitch, 0.2f, 0.0f, Deg36);
 
@@ -379,6 +412,7 @@ bool Explore() {
     if (!rival || !avatar) return false;
 
     Pilot pilot;
+    pilot.cameraDist = 0.0f;
     pilot.radius = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetInnerRadius));
     pilot.ceiling = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetTop)) + 30.0f;
     pilot.floor = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetBottom));
@@ -473,16 +507,16 @@ bool Explore() {
             FlightLog("Altitude", frames, pilot.position.y);
         }
         if (remaining < 65.0f) {
-            // Animación de llegada al punto C antes de terminar el vuelo.
-            static int arrivalFrames = 0;
-            if (arrivalFrames == 0) {
-                Game(rva::BtlAnim_Play, fighter, 0, AsWord(0.15f));  // pose de llegada/idle
+            // Animación de llegada al punto C antes de terminar el vuelo (BT2: llega al destino y pasa al idle).
+            if (!pilot.arrived) {
+                pilot.arrived = true;
+                pilot.arriveFrames = 0;
+                Game(rva::BtlAnim_Play, fighter, 0, AsWord(0.15f));
                 pilot.motion = 0;
             }
-            arrivalFrames++;
-            if (arrivalFrames >= 90) {
+            pilot.arriveFrames++;
+            if (pilot.arriveFrames >= 90) {
                 FlightLog("Point C reached", frames, remaining);
-                arrivalFrames = 0;
                 break;
             }
         }
