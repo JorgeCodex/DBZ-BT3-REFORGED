@@ -393,7 +393,7 @@ bool Explore() {
     if (!rival || !avatar) return false;
 
     Pilot pilot;
-    pilot.radius = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetInnerRadius));
+    pilot.radius = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetInnerRadius)) * 5.0f;
     pilot.ceiling = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetTop)) + 30.0f;
     pilot.floor = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetBottom));
     if (!std::isfinite(pilot.radius) || pilot.radius < 150.0f || pilot.ceiling >= pilot.floor) return false;
@@ -404,10 +404,10 @@ bool Explore() {
     Game(rva::BtlStage_GetStartPlace, 1, &pilot.goal, &rivalHeading, 0);
     const float headingToGoal = std::atan2(pilot.goal.x - pilot.position.x, pilot.goal.z - pilot.position.z);
     if (!std::isfinite(headingToGoal)) return false;
-    const float route = std::min(600.0f, pilot.radius * 0.6f);
+    const float route = std::min(600.0f * 5.0f, pilot.radius * 0.6f);
     const float startX = pilot.goal.x - std::sin(headingToGoal) * route;
     const float startZ = pilot.goal.z - std::cos(headingToGoal) * route;
-    if (std::hypot(startX, startZ) < pilot.radius - 45.0f) {
+    if (std::hypot(startX, startZ) < pilot.radius - 45.0f * 5.0f) {
         pilot.position.y = GroundY(startX, startZ, pilot.position.y);
         pilot.position.x = startX;
         pilot.position.z = startZ;
@@ -420,8 +420,8 @@ bool Explore() {
         const float z = pilot.position.z + (pilot.goal.z - pilot.position.z) * weight;
         highestGround = std::min(highestGround, GroundY(x, z, highestGround));
     }
-    pilot.position.y = pilot.goal.y = std::max(pilot.ceiling, highestGround - 90.0f);
-    if (Distance(pilot.position, pilot.goal) < 90.0f) return false;
+    pilot.position.y = pilot.goal.y = std::max(pilot.ceiling, highestGround - 90.0f * 5.0f);
+    if (Distance(pilot.position, pilot.goal) < 90.0f * 5.0f) return false;
     pilot.heading = pilot.modelYaw = headingToGoal;
 
     // Font_PrintAsciiAt receives a PS2-style 32-bit string address.
@@ -486,7 +486,7 @@ bool Explore() {
             FlightLog("Distance to C", frames, remaining);
             FlightLog("Altitude", frames, pilot.position.y);
         }
-        if (remaining < 65.0f) {
+        if (remaining < 65.0f * 5.0f) {
             // Animación de llegada al punto C antes de terminar el vuelo (BT2: llega al destino y pasa al idle).
             if (!pilot.arrived) {
                 pilot.arrived = true;
@@ -522,15 +522,16 @@ bool AdventureCycle() {
     if (!avatar) return false;
 
     Pilot pilot;
-    pilot.radius = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetInnerRadius));
+    pilot.radius = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetInnerRadius)) * 5.0f;
     pilot.ceiling = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetTop)) + 30.0f;
     pilot.floor = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetBottom));
     if (!std::isfinite(pilot.radius) || pilot.radius < 150.0f || pilot.ceiling >= pilot.floor) return false;
 
     // Coordenadas propias del mapa de aventura: punto de aparición y destino.
     // La cápsula de Raditz cae cerca del borde; el destino está al otro lado del mapa.
-    pilot.position = { -300.0f, 0.0f, -300.0f };
-    pilot.goal = { 300.0f, 0.0f, 300.0f };
+    // Mapa escalado x5: el área navegable y las coordenadas se multiplican por 5.
+    pilot.position = { -1500.0f, 0.0f, -1500.0f };
+    pilot.goal = { 1500.0f, 0.0f, 1500.0f };
     pilot.position.y = GroundY(pilot.position.x, pilot.position.z, pilot.ceiling);
     pilot.goal.y = GroundY(pilot.goal.x, pilot.goal.z, pilot.ceiling);
     const float headingToGoal = std::atan2(pilot.goal.x - pilot.position.x, pilot.goal.z - pilot.position.z);
@@ -577,7 +578,7 @@ bool AdventureCycle() {
             FlightLog("Distance to goal", frames, remaining);
             FlightLog("Altitude", frames, pilot.position.y);
         }
-        if (remaining < 65.0f) {
+        if (remaining < 65.0f * 5.0f) {
             if (!pilot.arrived) {
                 pilot.arrived = true;
                 pilot.arriveFrames = 0;
