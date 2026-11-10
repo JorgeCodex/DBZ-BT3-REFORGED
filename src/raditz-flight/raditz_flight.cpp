@@ -193,19 +193,19 @@ void SetPilotPose(Pilot& pilot, void* fighter, void* avatar, float ground) {
     SetLean(avatar, leanX, leanZ);
     Game(rva::BtlObjXf_Update, avatar);
 
-    const Vec look{pilot.position.x + std::sin(pilot.cameraYaw) * 30.0f,
-                   pilot.position.y + 8.0f,
-                   pilot.position.z + std::cos(pilot.cameraYaw) * 30.0f};
+    const Vec look{pilot.position.x + std::sin(pilot.cameraYaw) * 50.0f,
+                   pilot.position.y + 12.0f,
+                   pilot.position.z + std::cos(pilot.cameraYaw) * 50.0f};
 
     // BT2-style camera: 3 distance presets cycled with SELECT, interpolated smoothly.
     // dist = character height * 0.5 + 1.0 (min 10); offset scales with dist.
-    const float charHeight = 10.0f * 1.3f; // avatar scale 1.3 (reducido para no estorbar)
+    const float charHeight = 10.0f * 1.0f; // avatar scale 1.0 (tamaño real, no agrandado)
     const float baseDist = std::max(charHeight * 0.5f + 1.0f, 10.0f);
     float offsetY = 0.0f, offsetZ = 0.0f;
     switch (pilot.cameraDistMode) {
-        case 1: offsetY = -baseDist * 1.8f; offsetZ = -baseDist * 3.6f; break; // más alejado
-        case 2: offsetY = -baseDist * 2.4f; offsetZ = -baseDist * 4.2f; break; // más alejado
-        case 0: default: offsetY = -baseDist * 1.4f; offsetZ = -baseDist * 3.0f; break; // más alejado
+        case 1: offsetY = -baseDist * 2.2f; offsetZ = -baseDist * 5.0f; break; // lejos
+        case 2: offsetY = -baseDist * 2.8f; offsetZ = -baseDist * 6.0f; break; // muy lejos
+        case 0: default: offsetY = -baseDist * 1.6f; offsetZ = -baseDist * 4.0f; break; // cerca
     }
     // Smoothly interpolate camera distance toward the preset (BT2 ChrCam_GetRate style).
     const float wantedDist = std::hypot(offsetY, offsetZ);
@@ -462,7 +462,7 @@ bool Explore() {
     int& avatarNoAnim = Field<int>(avatar, 0xC70);
     const int savedNoAnim = std::exchange(avatarNoAnim, 0);
     float& avatarScale = Field<float>(avatar, 0xA20);
-    const float savedScale = std::exchange(avatarScale, 1.3f);
+    const float savedScale = std::exchange(avatarScale, 1.0f);
     auto& avatarFlags = Field<std::uint32_t>(avatar, 0xA40);
     const auto savedAvatarFlags = avatarFlags;
     Game(rva::BtlScene_SetSingleView, 1);
@@ -571,7 +571,7 @@ bool AdventureCycle() {
     int& avatarNoAnim = Field<int>(avatar, 0xC70);
     const int savedNoAnim = std::exchange(avatarNoAnim, 0);
     float& avatarScale = Field<float>(avatar, 0xA20);
-    const float savedScale = std::exchange(avatarScale, 1.3f);
+    const float savedScale = std::exchange(avatarScale, 1.0f);
     auto& avatarFlags = Field<std::uint32_t>(avatar, 0xA40);
     const auto savedAvatarFlags = avatarFlags;
     Game(rva::BtlScene_SetSingleView, 1);
