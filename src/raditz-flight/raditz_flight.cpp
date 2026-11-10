@@ -56,6 +56,7 @@ void FlightLog(const char* message, int frames = 0, float value = 0) {
 }
 
 bool flightPending = false;
+bool adventurePending = false;
 std::uint32_t originalStage = 0;
 void* earthStage = nullptr;
 
@@ -402,6 +403,8 @@ void Draw(const Pilot& pilot, char* overlayText) {
     Game(rva::Gfx_MarkPass, 0);
 }
 
+bool AdventureCycle();
+
 bool Explore() {
     if (!Game<int>(rva::BtlStage_IsReady)) return false;
     auto* fighter = Game<void*>(rva::BtlChar_Get, 0);
@@ -533,10 +536,106 @@ bool Explore() {
     Game(rva::Port_LowFree, overlayText);
     return true;
 }
+
+bool AdventureCycle() {
+    if (!Game<int>(rva::BtlStage_IsReady)) return false;
+    auto* fighter = Game<void*>(rva::BtlChar_Get, 0);
+    if (!fighter) return false;
+    auto* avatar = Game<void*>(rva::BtlChar_GetObj, fighter);
+    if (!avatar) return false;
+
+    Pilot pilot;
+    pilot.cameraDist = 0.0f;
+    pilot.radius = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetInnerRadius));
+    pilot.ceiling = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetTop)) + 30.0f;
+    pilot.floor = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetBottom));
+    if (!std::isfinite(pilot.radius) || pilot.radius < 150.0f || pilot.ceiling >= pilot.floor) return false;
+
+    // Coordenadas propias del mapa de aventura: punto de aparición y destino.
+    // La cápsula de Raditz cae cerca del borde; el destino está al otro lado del mapa.
+    pilot.position = { -300.0f, 0.0f, -300.0f };
+    pilot.goal = { 300.0f, 0.0f, 300.0f };
+    pilot.position.y = GroundY(pilot.position.x, pilot.position.z, pilot.ceiling);
+    pilot.goal.y = GroundY(pilot.goal.x, pilot.goal.z, pilot.ceiling);
+    const float headingToGoal = std::atan2(pilot.goal.x - pilot.position.x, pilot.goal.z - pilot.position.z);
+    if (!std::isfinite(headingToGoal)) return false;
+    pilot.heading = pilot.modelYaw = pilot.cameraYaw = headingToGoal;
+
+    auto* overlayText = Game<char*>(rva::Port_LowAlloc, std::size_t{128});
+    if (!overlayText) return false;
+
+    int& avatarActive = Field<int>(avatar, 8);
+    const int savedAvatarActive = std::exchange(avatarActive, 1);
+    int& avatarNoAnim = Field<int>(avatar, 0xC70);
+    const int savedNoAnim = std::exchange(avatarNoAnim, 0);
+    float& avatarScale = Field<float>(avatar, 0xA20);
+    const float savedScale = std::exchange(avatarScale, 1.6f);
+    auto& avatarFlags = Field<std::uint32_t>(avatar, 0xA40);
+    const auto savedAvatarFlags = avatarFlags;
+    Game(rva::BtlScene_SetSingleView, 1);
+    auto* pad = reinterpret_cast<void*>(ImageBase() + rva::gPad);
+    const bool recorded = GetEnvironmentVariableW(L"BT3_PAD_PLAY", nullptr, 0) != 0;
+    FlightLog("Adventure started", recorded ? Game<int>(rva::Port_PadPlayPos) : 0, Distance(pilot.position, pilot.goal));
+
+    for (int frames = 1;; ++frames) {
+        Game(rva::Job_Run);
+        Game(rva::Gfx_BeginFrame);
+        Game(rva::Pad_Update);
+        Game(rva::Snd_Update);
+        const float ground = Move(pilot, pad);
+        SetPilotPose(pilot, fighter, avatar, ground);
+        Game(rva::BtlStage_Update);
+        Game(rva::BtlCam_SelectView, 0);
+        Game(rva::BtlCam_UpdateView, 0);
+        avatarFlags |= 2;  // BTL_OBJ_FLAG_VISIBLE
+        avatarNoAnim = 0;
+        Game(rva::BtlObj_UpdateAll);
+        Game(rva::BtlObj_UpdateVisibility, 0);
+        Game(rva::BtlObj_FinishVisibility, 0);
+        Draw(pilot, overlayText);
+        Game(rva::Gfx_EndFrame, 2);
+        Game(rva::Dma_Flush);
+
+        const float remaining = Distance(pilot.position, pilot.goal);
+        if (recorded && frames % 60 == 0 && frames <= 240) {
+            FlightLog("Distance to goal", frames, remaining);
+            FlightLog("Altitude", frames, pilot.position.y);
+        }
+        if (remaining < 65.0f) {
+            if (!pilot.arrived) {
+                pilot.arrived = true;
+                pilot.arriveFrames = 0;
+                Game(rva::BtlAnim_Play, fighter, 0, AsWord(0.15f));
+                pilot.motion = 0;
+            }
+            pilot.arriveFrames++;
+            if (pilot.arriveFrames >= 90) {
+                FlightLog("Adventure destination reached", frames, remaining);
+                break;
+            }
+        }
+        if (recorded && frames >= 900) {
+            FlightLog("Adventure recording timeout", frames, remaining);
+            break;
+        }
+    }
+
+    avatarActive = savedAvatarActive;
+    avatarNoAnim = savedNoAnim;
+    avatarScale = savedScale;
+    avatarFlags = savedAvatarFlags;
+    Game(rva::Port_LowFree, overlayText);
+    FlightLog("Adventure cycle ended");
+    return true;
+}
 } // namespace
 
 void ArmRaditzFlight() {
     flightPending = true;
+}
+
+void ArmRaditzAdventure() {
+    adventurePending = true;
 }
 
 extern "C" __declspec(dllexport) void RaditzInitStage() {
@@ -556,7 +655,12 @@ extern "C" __declspec(dllexport) void RaditzInitStage() {
 }
 
 extern "C" __declspec(dllexport) void RaditzBattleLoop() {
-    if (std::exchange(flightPending, false) && earthStage) {
+    if (std::exchange(adventurePending, false) && earthStage) {
+        if (!AdventureCycle()) FlightLog("BT2 Earth adventure unavailable");
+        // Adventure owns the stage: no swap, no Battle_Restart. The native battle
+        // initializes fresh on the first Battle_Loop call.
+        FlightLog("Adventure yielded to native battle");
+    } else if (std::exchange(flightPending, false) && earthStage) {
         if (!Explore()) FlightLog("BT2 Earth flight unavailable");
         Game(rva::BtlLoad_BeginStageSwap);
         StageResource() = std::exchange(originalStage, 0);

@@ -9,6 +9,7 @@
 extern "C" __declspec(dllexport) void PlayRaditzIntro();
 #ifdef RADITZ_FLIGHT
 void ArmRaditzFlight();
+void ArmRaditzAdventure();
 #endif
 
 namespace {
@@ -165,7 +166,7 @@ void Play(const std::filesystem::path& folder, HWND parent) {
 extern "C" __declspec(dllexport) void PlayRaditzIntro() {
     const HWND parent = GameWindow();
 #ifdef RADITZ_FLIGHT
-    ArmRaditzFlight();
+    ArmRaditzAdventure();
 #endif
     if (!parent) return;
     const auto folder = ModuleFolder();
