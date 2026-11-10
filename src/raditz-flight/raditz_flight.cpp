@@ -159,7 +159,18 @@ float Distance(const Vec& a, const Vec& b) {
 
 void SetPilotPose(Pilot& pilot, void* fighter, void* avatar, float ground) {
     const float speed = std::hypot(pilot.velocity.x, pilot.velocity.z);
-    const int motion = speed > 1.0f ? 0xD : (ground - pilot.position.y > 7.0f ? 0x26 : 0);
+    // Animaciones nativas de vuelo libre del motor (acción 0xD):
+    //  movimiento -> motion 3 (loop), inicio -> motion 2.
+    //  Vuelo quieto -> 0x26 / 0x27 (según el gatillo de gauge).
+    //  En suelo -> 0.
+    int motion;
+    if (speed > 1.0f) {
+        motion = 3;
+    } else if (ground - pilot.position.y > 7.0f) {
+        motion = 0x26;
+    } else {
+        motion = 0;
+    }
     if (pilot.motion != motion || Game<int>(rva::BtlAnim_Advance, fighter, 0)) {
         Game(rva::BtlAnim_Play, fighter, motion, AsWord(0.12f));
         pilot.motion = motion;
@@ -169,17 +180,17 @@ void SetPilotPose(Pilot& pilot, void* fighter, void* avatar, float ground) {
     // The engine's placement function updates both the current and prior model roots.
     Game(rva::BtlChar_Place, fighter, &pilot.position, &rotation, 0);
     // Keep the pose lean fields in sync with the object quaternion, as BtlChar_UpdateLean does.
-    const float leanX = std::clamp(pilot.pitch, -1.2f, 1.2f) * 0.72f;
-    const float leanZ = std::clamp(pilot.bank, -0.6f, 0.6f);
+    const float leanX = std::clamp(pilot.pitch, -1.0f, 1.0f) * 0.6f;
+    const float leanZ = std::clamp(pilot.bank, -0.5f, 0.5f);
     Field<float>(fighter, 0xB0) = leanX;
     Field<float>(fighter, 0xB4) = leanZ;
     SetLean(avatar, leanX, leanZ);
     Game(rva::BtlObjXf_Update, avatar);
 
-    const Vec look{pilot.position.x, pilot.position.y - 16.0f, pilot.position.z};
-    const Vec desired{pilot.position.x - std::sin(pilot.cameraYaw) * 165.0f,
-                      pilot.position.y - 64.0f,
-                      pilot.position.z - std::cos(pilot.cameraYaw) * 165.0f};
+    const Vec look{pilot.position.x, pilot.position.y - 12.0f, pilot.position.z};
+    const Vec desired{pilot.position.x - std::sin(pilot.cameraYaw) * 115.0f,
+                      pilot.position.y - 42.0f,
+                      pilot.position.z - std::cos(pilot.cameraYaw) * 115.0f};
     Vec& eye = Field<Vec>(fighter, 0x430);
     Game<int>(rva::BtlCam_TraceStage, &eye, &desired, &look,
               static_cast<float*>(nullptr), static_cast<int*>(nullptr));
@@ -223,22 +234,20 @@ float Move(Pilot& pilot, void* pad) {
     } else if (std::hypot(desired.x, desired.z) > 0.1f) {
         wantedHeading = std::atan2(desired.x, desired.z);
     }
-    const float previousYaw = pilot.modelYaw;
     pilot.heading = wantedHeading;
     pilot.modelYaw = TurnToward(pilot.modelYaw, pilot.heading, 0.3f, 0.0314f, Deg36);
 
-    // Engine pitch: positive when descending (forward direction y = -sin(pitch)).
-    const float verticalSpeed = pilot.velocity.y;
-    const float flightSpeed = std::hypot(horizontalSpeed, verticalSpeed);
-    const float wantedPitch = flightSpeed > 1.0f
-        ? std::atan2(-verticalSpeed, horizontalSpeed)
-        : 0.0f;
-    pilot.pitch = TurnToward(pilot.pitch, wantedPitch, 0.3f, 0.0f, Deg36);
+    // Pitch basado en la entrada de subir/bajar (no en la velocidad vertical,
+    // que cambia cada frame por el suavizado y provoca el balanceo del cuerpo).
+    // Convención del motor: pitch positivo = nariz hacia abajo (descendiendo).
+    const float verticalInput = button(Descend) - button(Ascend);
+    const float wantedPitch = verticalInput * 0.45f;
+    pilot.pitch = TurnToward(pilot.pitch, wantedPitch, 0.2f, 0.0f, Deg36);
 
-    // Lean into the turn; the model yaw error gives the yaw rate for this frame.
-    const float yawError = std::remainder(pilot.modelYaw - previousYaw, Tau);
-    const float wantedBank = std::clamp(-yawError * 0.6f, -0.55f, 0.55f);
-    pilot.bank += (wantedBank - pilot.bank) * 0.15f;
+    // Bank basado en la entrada de giro (más estable que derivarlo del cambio
+    // de yaw por frame, que va y viene constantemente).
+    const float wantedBank = std::clamp(turn * 0.4f, -0.45f, 0.45f);
+    pilot.bank += (wantedBank - pilot.bank) * 0.2f;
 
     Vec next{pilot.position.x + pilot.velocity.x,
              pilot.position.y + pilot.velocity.y,
@@ -414,7 +423,7 @@ bool Explore() {
     int& avatarNoAnim = Field<int>(avatar, 0xC70);
     const int savedNoAnim = std::exchange(avatarNoAnim, 0);
     float& avatarScale = Field<float>(avatar, 0xA20);
-    const float savedScale = std::exchange(avatarScale, 1.0f);
+    const float savedScale = std::exchange(avatarScale, 1.6f);
     auto& avatarFlags = Field<std::uint32_t>(avatar, 0xA40);
     const auto savedAvatarFlags = avatarFlags;
     Game(rva::BtlScene_SetSingleView, 1);
@@ -464,8 +473,18 @@ bool Explore() {
             FlightLog("Altitude", frames, pilot.position.y);
         }
         if (remaining < 65.0f) {
-            FlightLog("Point C reached", frames, remaining);
-            break;
+            // Animación de llegada al punto C antes de terminar el vuelo.
+            static int arrivalFrames = 0;
+            if (arrivalFrames == 0) {
+                Game(rva::BtlAnim_Play, fighter, 0, AsWord(0.15f));  // pose de llegada/idle
+                pilot.motion = 0;
+            }
+            arrivalFrames++;
+            if (arrivalFrames >= 90) {
+                FlightLog("Point C reached", frames, remaining);
+                arrivalFrames = 0;
+                break;
+            }
         }
         if (recorded && frames >= 900) {
             FlightLog("Recording did not reach C", frames, remaining);
