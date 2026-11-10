@@ -105,13 +105,12 @@ struct Pilot {
     Vec position;
     Vec goal;
     Vec velocity{0, 0, 0, 0};
-    float heading = 0;     // direction of travel, from the actual velocity
+    float heading = 0;     // facing requested by the turn input
     float modelYaw = 0;    // model facing, turned towards heading at a limited rate
     float pitch = 0;       // flight pitch, engine sign: positive = descending
     float bank = 0;        // sideways lean while turning
-    float cameraYaw = 0;
-    int cameraDistMode = 0; // BT2-style distance preset cycled with SELECT (0..2)
-    float cameraDist = 0;   // smoothed distance to the target pose
+    int cameraDistMode = 0; // distance preset cycled with SELECT (0..2)
+    float cameraScale = 1.0f;
     float radius = 0;
     float ceiling = 0;
     float floor = 0;
@@ -122,6 +121,11 @@ struct Pilot {
 
 constexpr float Tau = 6.2831853f;
 constexpr float Deg36 = 0.62831853f;
+
+// Relative pose measured on the first visible frame of BT2 Dragon Adventure.
+constexpr float AdventureCameraHeight = 23.26146f;
+constexpr float AdventureCameraBack = 29.156279f;
+constexpr float AdventureCameraTilt = 0.30f;
 
 // Same rule as BtlMove_TurnModelYaw: step = |delta| * rate, clamped, never overshooting.
 float TurnToward(float current, float target, float rate, float minStep, float maxStep) {
@@ -193,34 +197,26 @@ void SetPilotPose(Pilot& pilot, void* fighter, void* avatar, float ground) {
     SetLean(avatar, leanX, leanZ);
     Game(rva::BtlObjXf_Update, avatar);
 
-    const Vec look{pilot.position.x + std::sin(pilot.cameraYaw) * 50.0f,
-                   pilot.position.y + 12.0f,
-                   pilot.position.z + std::cos(pilot.cameraYaw) * 50.0f};
-
-    // BT2-style camera: 3 distance presets cycled with SELECT, interpolated smoothly.
-    // dist = character height * 0.5 + 1.0 (min 10); offset scales with dist.
-    const float charHeight = 10.0f * 1.0f; // avatar scale 1.0 (tamaño real, no agrandado)
-    const float baseDist = std::max(charHeight * 0.5f + 1.0f, 10.0f);
-    float offsetY = 0.0f, offsetZ = 0.0f;
-    switch (pilot.cameraDistMode) {
-        case 1: offsetY = -baseDist * 2.2f; offsetZ = -baseDist * 5.0f; break; // lejos
-        case 2: offsetY = -baseDist * 2.8f; offsetZ = -baseDist * 6.0f; break; // muy lejos
-        case 0: default: offsetY = -baseDist * 1.6f; offsetZ = -baseDist * 4.0f; break; // cerca
-    }
-    // Smoothly interpolate camera distance toward the preset (BT2 ChrCam_GetRate style).
-    const float wantedDist = std::hypot(offsetY, offsetZ);
-    pilot.cameraDist += (wantedDist - pilot.cameraDist) * 0.1f;
-    const float scale = pilot.cameraDist / wantedDist;
+    const float sine = std::sin(pilot.modelYaw);
+    const float cosine = std::cos(pilot.modelYaw);
+    const float wantedScale = 1.0f + 0.25f * pilot.cameraDistMode;
+    pilot.cameraScale += (wantedScale - pilot.cameraScale) * 0.1f;
+    const float back = AdventureCameraBack * pilot.cameraScale;
     const Vec desired{
-        pilot.position.x + std::sin(pilot.cameraYaw) * (offsetZ * scale),
-        pilot.position.y + offsetY * scale,
-        pilot.position.z + std::cos(pilot.cameraYaw) * (offsetZ * scale),
+        pilot.position.x - sine * back,
+        pilot.position.y - AdventureCameraHeight * pilot.cameraScale,
+        pilot.position.z - cosine * back,
     };
+    const Vec pivot{pilot.position.x, pilot.position.y - 12.0f, pilot.position.z};
     Vec& eye = Field<Vec>(fighter, 0x430);
-    Game<int>(rva::BtlCam_TraceStage, &eye, &desired, &look,
+    Game<int>(rva::BtlCam_TraceStage, &eye, &desired, &pivot,
               static_cast<float*>(nullptr), static_cast<int*>(nullptr));
+    // Use the resolved eye so a stage hit changes the distance without changing the tilt.
+    const Vec look{eye.x + sine * AdventureCameraBack,
+                   eye.y + std::tan(AdventureCameraTilt) * AdventureCameraBack,
+                   eye.z + cosine * AdventureCameraBack};
     Game(rva::Vec3_DiffToEuler, &Field<Vec>(fighter, 0x440), &look, &eye);
-    Field<float>(fighter, 0x4A0) = pilot.cameraYaw;
+    Field<float>(fighter, 0x4A0) = pilot.modelYaw;
 }
 
 float Move(Pilot& pilot, void* pad) {
@@ -233,15 +229,16 @@ float Move(Pilot& pilot, void* pad) {
     const float forward = std::clamp(-Field<float>(pad, 0x1A8) + btn(Up) - btn(Down), -1.0f, 1.0f);
     const float strafe = Field<float>(pad, 0x1A4);
     const float turn = std::clamp(Field<float>(pad, 0x1AC) + btn(Right) - btn(Left), -1.0f, 1.0f);
-    pilot.cameraYaw = std::remainder(pilot.cameraYaw + turn * 0.055f, Tau);
+    pilot.heading = std::remainder(pilot.heading + turn * 0.055f, Tau);
+    pilot.modelYaw = TurnToward(pilot.modelYaw, pilot.heading, 0.3f, 0.0314f, Deg36);
 
     // Cycle camera distance preset with SELECT (BT2 ChrCam_UpdateInput).
     if (selPressed) {
         pilot.cameraDistMode = (pilot.cameraDistMode + 1) % 3;
     }
 
-    const float sine = std::sin(pilot.cameraYaw);
-    const float cosine = std::cos(pilot.cameraYaw);
+    const float sine = std::sin(pilot.modelYaw);
+    const float cosine = std::cos(pilot.modelYaw);
     // BT2 turbo: faster than normal cruise (warp uses 500 km/h).
     const float rate = (held & Boost) ? 22.0f : 8.0f;
     const float diagonal = std::max(1.0f, std::hypot(forward, strafe));
@@ -251,27 +248,6 @@ float Move(Pilot& pilot, void* pad) {
     pilot.velocity.x += (desired.x - pilot.velocity.x) * 0.25f;
     pilot.velocity.y += (desired.y - pilot.velocity.y) * 0.25f;
     pilot.velocity.z += (desired.z - pilot.velocity.z) * 0.25f;
-
-    // Keep the camera trailing the model while the player is not turning it,
-    // with the gentle rate the engine's free camera uses.
-    const float horizontalSpeed = std::hypot(pilot.velocity.x, pilot.velocity.z);
-    if (std::fabs(turn) < 0.05f && horizontalSpeed > 1.0f) {
-        const float delta = std::remainder(pilot.modelYaw - pilot.cameraYaw, Tau);
-        const float follow = std::min(std::fabs(std::sin(delta)) * 0.05f, 0.0333f);
-        const float step = std::min(follow, std::fabs(delta));
-        pilot.cameraYaw = std::remainder(pilot.cameraYaw + std::copysign(step, delta), Tau);
-    }
-
-    // Face the direction the character is actually flying; while the velocity is
-    // still building up, follow the requested direction so the turn starts cleanly.
-    float wantedHeading = pilot.heading;
-    if (horizontalSpeed > 0.5f) {
-        wantedHeading = std::atan2(pilot.velocity.x, pilot.velocity.z);
-    } else if (std::hypot(desired.x, desired.z) > 0.1f) {
-        wantedHeading = std::atan2(desired.x, desired.z);
-    }
-    pilot.heading = wantedHeading;
-    pilot.modelYaw = TurnToward(pilot.modelYaw, pilot.heading, 0.3f, 0.0314f, Deg36);
 
     // Pitch basado en la entrada de subir/bajar (no en la velocidad vertical,
     // que cambia cada frame por el suavizado y provoca el balanceo del cuerpo).
@@ -370,8 +346,8 @@ void DrawMarker(const Pilot& pilot, char* label) {
         x = static_cast<int>(std::clamp(dot(0) / depth - 1792.0f, 24.0f, 488.0f));
         y = static_cast<int>(std::clamp(dot(1) / depth - 1824.0f, 52.0f, 410.0f));
     } else {
-        const float side = (goal.x - pilot.position.x) * std::cos(pilot.cameraYaw) -
-                           (goal.z - pilot.position.z) * std::sin(pilot.cameraYaw);
+        const float side = (goal.x - pilot.position.x) * std::cos(pilot.modelYaw) -
+                           (goal.z - pilot.position.z) * std::sin(pilot.modelYaw);
         x = side < 0 ? 24 : 488;
         y = 216;
     }
@@ -417,7 +393,6 @@ bool Explore() {
     if (!rival || !avatar) return false;
 
     Pilot pilot;
-    pilot.cameraDist = 0.0f;
     pilot.radius = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetInnerRadius));
     pilot.ceiling = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetTop)) + 30.0f;
     pilot.floor = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetBottom));
@@ -447,7 +422,7 @@ bool Explore() {
     }
     pilot.position.y = pilot.goal.y = std::max(pilot.ceiling, highestGround - 90.0f);
     if (Distance(pilot.position, pilot.goal) < 90.0f) return false;
-    pilot.heading = pilot.modelYaw = pilot.cameraYaw = headingToGoal;
+    pilot.heading = pilot.modelYaw = headingToGoal;
 
     // Font_PrintAsciiAt receives a PS2-style 32-bit string address.
     auto* overlayText = Game<char*>(rva::Port_LowAlloc, std::size_t{128});
@@ -547,7 +522,6 @@ bool AdventureCycle() {
     if (!avatar) return false;
 
     Pilot pilot;
-    pilot.cameraDist = 0.0f;
     pilot.radius = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetInnerRadius));
     pilot.ceiling = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetTop)) + 30.0f;
     pilot.floor = AsFloat(Game<std::uint32_t>(rva::BtlStage_GetBottom));
@@ -561,7 +535,7 @@ bool AdventureCycle() {
     pilot.goal.y = GroundY(pilot.goal.x, pilot.goal.z, pilot.ceiling);
     const float headingToGoal = std::atan2(pilot.goal.x - pilot.position.x, pilot.goal.z - pilot.position.z);
     if (!std::isfinite(headingToGoal)) return false;
-    pilot.heading = pilot.modelYaw = pilot.cameraYaw = headingToGoal;
+    pilot.heading = pilot.modelYaw = headingToGoal;
 
     auto* overlayText = Game<char*>(rva::Port_LowAlloc, std::size_t{128});
     if (!overlayText) return false;

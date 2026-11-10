@@ -166,7 +166,7 @@ void Play(const std::filesystem::path& folder, HWND parent) {
 extern "C" __declspec(dllexport) void PlayRaditzIntro() {
     const HWND parent = GameWindow();
 #ifdef RADITZ_FLIGHT
-    ArmRaditzAdventure();
+    ArmRaditzFlight();
 #endif
     if (!parent) return;
     const auto folder = ModuleFolder();
