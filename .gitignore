@@ -1,0 +1,41 @@
+# Build outputs and local game installation
+/build/
+**/build/
+*.exe
+*.dll
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
+*.iso
+*.mp4
+*.mkv
+*.avi
+*.bin
+*.dat
+*.mem
+*.log
+/saves/
+/gamedata/
+
+# Local or generated extracted assets are ignored by default.
+*.unk
+
+
+# Personal or temporary files
+*.user
+*.suo
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Local ISO and BT2 recompilation source; keep local, do not publish.
+/external/local-only/
+
+# BT2-derived map binaries stay local; do not publish them.
+/assets/maps/earth/*.unk
+/assets/maps/earth/*.blend
+/assets/maps/earth/*.glb
+/assets/maps/earth/*.png

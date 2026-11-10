@@ -1,0 +1,65 @@
+#pragma once
+#include <cstdint>
+
+namespace rva {
+constexpr std::uintptr_t Battle_Loop = 0x25f0;
+constexpr std::uintptr_t Battle_Restart = 0x2060;
+constexpr std::uintptr_t BtlAnim_Advance = 0x63200;
+constexpr std::uintptr_t BtlAnim_Play = 0x62820;
+constexpr std::uintptr_t BtlCam_Reset = 0x3c0d0;
+constexpr std::uintptr_t BtlCam_SelectView = 0x3c8b0;
+constexpr std::uintptr_t BtlCam_TraceStage = 0x3c640;
+constexpr std::uintptr_t BtlCam_UpdateView = 0x3c1a0;
+constexpr std::uintptr_t BtlChar_Get = 0x564a0;
+constexpr std::uintptr_t BtlChar_GetObj = 0x56540;
+constexpr std::uintptr_t BtlChar_Place = 0x4d360;
+constexpr std::uintptr_t BtlLoad_BeginStageSwap = 0x2880;
+constexpr std::uintptr_t BtlLoad_EndStageSwap = 0x28a0;
+constexpr std::uintptr_t BtlObjDraw_Draw = 0x4288a0;
+constexpr std::uintptr_t BtlObjVis_GetList = 0x686f0;
+constexpr std::uintptr_t BtlObjXf_Update = 0x9b70;
+constexpr std::uintptr_t BtlObj_FinishVisibility = 0x6b3d0;
+constexpr std::uintptr_t BtlObj_UpdateAll = 0x6b0c0;
+constexpr std::uintptr_t BtlObj_UpdateVisibility = 0x6b300;
+constexpr std::uintptr_t BtlScene_Draw = 0x6d260;
+constexpr std::uintptr_t BtlScene_SetSingleView = 0x6cb10;
+constexpr std::uintptr_t BtlStage_GetBottom = 0x135ea0;
+constexpr std::uintptr_t BtlStage_GetInnerRadius = 0x135de0;
+constexpr std::uintptr_t BtlStage_GetStartPlace = 0x138990;
+constexpr std::uintptr_t BtlStage_GetTop = 0x135e40;
+constexpr std::uintptr_t BtlStage_IsReady = 0x135a60;
+constexpr std::uintptr_t BtlStage_ProbeGround = 0x138900;
+constexpr std::uintptr_t BtlStage_Update = 0x1396f0;
+constexpr std::uintptr_t Dma_Flush = 0x414420;
+constexpr std::uintptr_t Font_FlushAll = 0x83470;
+constexpr std::uintptr_t Font_GetColor = 0x84a80;
+constexpr std::uintptr_t Font_GetScale = 0x84aa0;
+constexpr std::uintptr_t Font_IsEnabled = 0x83be0;
+constexpr std::uintptr_t Font_PrintAsciiAt = 0x846c0;
+constexpr std::uintptr_t Font_SetColor = 0x84a70;
+constexpr std::uintptr_t Font_SetEnabled = 0x83bc0;
+constexpr std::uintptr_t Font_SetScale = 0x84a90;
+constexpr std::uintptr_t Gfx_AddDefaultEnv = 0x417700;
+constexpr std::uintptr_t Gfx_BeginFrame = 0x4174e0;
+constexpr std::uintptr_t Gfx_EndFrame = 0x417500;
+constexpr std::uintptr_t Gfx_MarkPass = 0x417a40;
+constexpr std::uintptr_t Job_Run = 0x430870;
+constexpr std::uintptr_t Ot_Draw = 0x418420;
+constexpr std::uintptr_t Pad_Update = 0x4409a0;
+constexpr std::uintptr_t Port_LowAlloc = 0x3f25f0;
+constexpr std::uintptr_t Port_LowFree = 0x3f2870;
+constexpr std::uintptr_t Port_PadPlayPos = 0x3f95e0;
+constexpr std::uintptr_t Snd_Update = 0x445900;
+constexpr std::uintptr_t StgFx_DrawOverlay = 0x13f620;
+constexpr std::uintptr_t StgFx_DrawPost = 0x13f520;
+constexpr std::uintptr_t StgFx_DrawPre = 0x13f130;
+constexpr std::uintptr_t StgModel_Cull = 0x1425e0;
+constexpr std::uintptr_t StgModel_Draw = 0x142ea0;
+constexpr std::uintptr_t StgModel_InitStage = 0x141b60;
+constexpr std::uintptr_t Vec3_DiffToEuler = 0x40fe00;
+constexpr std::uintptr_t Vu0Screen_StoreMtx = 0x40c050;
+constexpr std::uintptr_t gBtlCamView = 0x4a7250;
+constexpr std::uintptr_t gCommonRes = 0x4a732c;
+constexpr std::uintptr_t gGsFrame = 0x7a2a20;
+constexpr std::uintptr_t gPad = 0x31d7a50;
+}
