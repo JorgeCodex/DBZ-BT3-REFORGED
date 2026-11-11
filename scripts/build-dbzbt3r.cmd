@@ -11,17 +11,17 @@ if errorlevel 1 (
 )
 if not exist build mkdir build
 pushd build
-cl /nologo /std:c++17 /O2 /W4 /EHsc /MT /DRADITZ_FLIGHT /LD "..\src\raditz-flight\raditz_player.cpp" "..\src\raditz-flight\raditz_flight.cpp" /link /OUT:RaditzIntro.dll mfplay.lib ole32.lib user32.lib
+cl /nologo /std:c++17 /O2 /W4 /EHsc /MT /DRADITZ_FLIGHT /LD "..\src\adventure\intro_video.cpp" "..\src\adventure\flight.cpp" /link /OUT:DBZBT3R.dll /IMPLIB:DBZBT3R.lib mfplay.lib ole32.lib user32.lib
 set "result=%errorlevel%"
 popd
 if not "%result%"=="0" exit /b %result%
-if exist "external\local-only\Raditz-Vuelo\" (
-  copy /y "build\RaditzIntro.dll" "external\local-only\Raditz-Vuelo\RaditzIntro.dll" >nul
+if exist "external\local-only\DBZBT3R\" (
+  copy /y "build\DBZBT3R.dll" "external\local-only\DBZBT3R\DBZBT3R.dll" >nul
   if errorlevel 1 (
     echo No se pudo actualizar la DLL del paquete local.
     exit /b 1
   )
-  echo DLL actualizada en external\local-only\Raditz-Vuelo\
+  echo DLL actualizada en external\local-only\DBZBT3R\
 )
-echo Compilacion terminada: build\RaditzIntro.dll
+echo Compilacion terminada: build\DBZBT3R.dll
 

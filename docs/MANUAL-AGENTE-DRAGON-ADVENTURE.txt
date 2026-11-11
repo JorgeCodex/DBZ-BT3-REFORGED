@@ -1,0 +1,137 @@
+MANUAL DE TRASPASO PARA EL AGENTE
+Dragon Ball Z Budokai Tenkaichi 3: Reforged
+
+1. OBJETIVO
+
+Implementa una primera versión de Dragon Adventure en BT3 Reforged. La misión
+de Raditz debe pasar por esta secuencia:
+
+  Confirmación de misión → cinemática MP4 → mapa de la Tierra con un actor
+  controlable → confirmación de un destino → descarga del mapa → primera
+  inicialización de la pelea nativa contra Raditz.
+
+La prioridad es separar el ciclo de vida de la aventura del combate. Usa una
+vista provisional. La cámara definitiva, el radar, el minimapa, las peleas
+adicionales y la ruta completa de la saga pertenecen a etapas posteriores.
+
+2. PROYECTO Y ESTADO ACTUAL
+
+Raíz de trabajo:
+C:\Users\jorge\Documents\Jorge\Proyectos\DBZ-BT3-REFORGED
+
+Trabaja en esa carpeta. Las siguientes rutas son relativas a la raíz:
+
+  docs/research/BT2-Dragon-Adventure-arquitectura.md
+    Informe técnico con evidencias, rutinas conocidas y límites del análisis.
+  src/adventure/intro_video.cpp
+    El ejecutable llama a PlayRaditzIntro() al confirmar la misión. Reproduce
+    el MP4 y luego abre Adventure. Enter permite omitir el vídeo.
+  src/adventure/flight.cpp
+    RunRaditzAdventure() se ejecuta antes de Battle_Main. Usa el cargador
+    de BT3 para preparar temporalmente los modelos, la cámara y los efectos.
+    El segundo modelo se oculta durante el vuelo. Al confirmar C, libera
+    la escena, restaura la selección de misión y devuelve el control al
+    ejecutable. Battle_Main inicializa la pelea con su arena original.
+  src/adventure/bt3_runtime_addresses.h
+    Desplazamientos del ejecutable del prototipo. Comprueba la compilación
+    exacta antes de reutilizar un desplazamiento.
+  assets/maps/earth/
+    Paquetes original y convertido del mapa. El convertido aporta geometría
+    visible. Sus colisiones y puntos de aparición de aventura no están resueltos.
+  external/local-only/DBZBT3R/DBZBT3R.cmd
+    Lanzador del prototipo existente. Usa los datos locales de
+    external/local-only/Tenkaichi3Decomp-v0.1.39.6/gamedata.
+  scripts/build-dbzbt3r.cmd
+    Compila DBZBT3R.dll con MSVC y, si existe el paquete DBZBT3R,
+    sustituye su DLL. Revisa ese efecto antes de usarlo para un experimento.
+
+La prueba anterior confirmó cinemática → vuelo → pelea. Conserva esa ejecución
+como referencia mientras haces la nueva integración en una copia local.
+
+3. BT2 COMO REFERENCIA DE IMPLEMENTACIÓN
+
+La copia de BT2-Recomp está en external/local-only/BT2-Recomp. La ISO que ya
+está en external/local-only/BT2.iso es PAL, SLES_541.64. Sirvió para confirmar
+el mapa de la Tierra y las conexiones entre guiones. La revisión compatible
+con BT2-Recomp es la estadounidense, SLUS-21441.
+
+Si el usuario proporciona la ISO estadounidense, mantenla en
+external/local-only/BT2-Recomp/rom/BT2-USA.iso. Desde la raíz de BT2-Recomp:
+
+  a. Lee AGENTS.md, docs/PROG.md, docs/progress/ACTIVE_PASS.md,
+     docs/guides/BUILDING.md y docs/plans/ee/STORY_MODE_PLAN.md.
+  b. Extrae de la raíz de la ISO SLUS_214.41 y SYSTEM.CNF en rom/. Comprueba
+     que pertenecen a la misma imagen. Usa PowerShell y ejecuta:
+
+     python tools/verify_game/verify_game.py rom/SLUS_214.41 --system-cnf rom/SYSTEM.CNF
+     python tools/verify_game/verify_disc.py rom/BT2-USA.iso --executable rom/SLUS_214.41
+     python tools/inspect_elf/inspect_elf.py rom/SLUS_214.41
+
+  c. Si la revisión coincide, sigue la guía de compilación y el estado de la
+     copia para preparar PS2Recomp y el mapa de funciones. Revisa el JDK,
+     Ghidra y las dependencias que pida esa revisión. Usa el procedimiento
+     documentado para generar el código local en game/generated/. Una ISO
+     compatible habilita el análisis, pero la generación requiere preparar
+     esas herramientas y la ejecución puede requerir otros insumos locales.
+  d. Empieza por la secuencia menú → historia (0x2A8A38) → fase de mapa
+     (0x2AC308) → preparación (0x2ACF90) → bucle del mapa (0x2ABF30) →
+     salida (0x2AD898) → preparación de combate (0x2AC450) →
+     combate (0x103000). Son direcciones de BT2 USA. Las direcciones del PAL,
+     las de BT3 PS2 y los desplazamientos de BT3 x64 se resuelven por separado.
+  e. Anota quién carga y descarga los recursos de escena, quién crea y
+     actualiza al actor, y qué datos pasan del destino al combate. Clasifica
+     cada hallazgo como leído en código, observado en ejecución o inferido.
+     Si el código generado solo muestra registros y direcciones, conserva
+     nombres descriptivos provisionales y anota la evidencia que los respalda.
+
+Con el probe preparado, BT2_START_EPISODE=0,0,marker:14 reproduce una salida
+controlada del mapa hacia la historia. Ese diagnóstico fuerza la llegada.
+Para estudiar una llegada real, usa una sesión con entrada normal desde el
+menú de Dragon Adventure, con BT2_START_EPISODE sin definir. Sigue el orden
+de llamadas y los cambios de estado con las herramientas de docs/guides/TOOLS.md.
+El guion y el evento de salida ya sirven de referencia aunque falte resolver
+la animación o el cálculo exacto de proximidad.
+
+Si la ISO USA todavía falta o la generación queda bloqueada, registra la
+causa y sigue con el apartado 4 usando el informe y el mapa existentes.
+
+4. ORDEN PARA IMPLEMENTAR LA AVENTURA EN REFORGED
+
+  [ ] Ubica la ruta posterior a la confirmación de misión y anterior a
+      Battle_Init en la compilación x64 que usa el mod. Consulta Battle_Main
+      en la descompilación PS2 como referencia. Identifica cómo preservar la
+      selección de misión y cómo volver al arranque nativo.
+  [ ] Implementa un ciclo de escena propio. Debe cargar, actualizar, dibujar
+      y descargar la Tierra con sus recursos bajo control de la aventura.
+      Comprueba las dependencias de cada función de escenario o dibujo que
+      reutilices antes de llamarla fuera del combate.
+  [ ] Crea un actor de exploración para Raditz con posición y orientación
+      propias. Añade vuelo básico, límites provisionales y un solo destino,
+      definidos con coordenadas del mapa. Evita usar los puntos iniciales
+      de los combatientes para fijar el recorrido.
+  [ ] Separa entrar en la zona, confirmar el destino y consumir el evento.
+      Al confirmar, descarga los recursos de aventura y arranca la misión
+      nativa una sola vez. Si falla la carga del mapa, libera lo adquirido
+      y continúa por el arranque normal de la misión.
+  [ ] Registra el orden real de las fases. Deja identificados el punto de
+      enganche y los archivos cambiados, para que otro agente pueda seguir.
+
+5. CRITERIOS DE ENTREGA
+
+  [ ] La cinemática funciona y Enter la omite. En ambos casos se abre el mapa.
+  [ ] Se controla un actor en el mapa antes de inicializar la pelea.
+  [ ] El mapa no requiere el segundo combatiente, un rival oculto ni un
+      intercambio de arena dentro del ciclo de batalla.
+  [ ] Confirmar el destino descarga la escena y carga la pelea nativa una
+      sola vez. La salida de la aventura no llama a Battle_Restart().
+  [ ] La traza distingue carga de aventura, evento, descarga e inicialización
+      de batalla. Indica qué se comprobó en ejecución y qué sigue pendiente.
+
+Mantén la ISO, ejecutables, MP4, mapas extraídos, trazas y código generado en
+las rutas locales ignoradas. Registra en el proyecto los cambios de Reforged
+y los hallazgos técnicos en texto.
+
+Referencias:
+https://github.com/oric212/BT2-Recomp
+https://github.com/oric212/BT2-Recomp/blob/master/docs/plans/ee/STORY_MODE_PLAN.md
+https://github.com/z3xox/BT3-Decompiled/blob/main/docs/systems/boot_and_frame.md

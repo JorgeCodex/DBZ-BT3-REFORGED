@@ -39,3 +39,7 @@ Thumbs.db
 /assets/maps/earth/*.blend
 /assets/maps/earth/*.glb
 /assets/maps/earth/*.png
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]

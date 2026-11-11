@@ -5,26 +5,26 @@ Repositorio del código fuente y la documentación del proyecto fan **Dragon Bal
 ## Estructura
 
 - `README.md`: estado actual, línea de tiempo, objetivos y notas de diseño de la Saga Saiyajin.
-- `src/raditz-flight/`: código C++ del prototipo actual de vuelo de Raditz.
-- `scripts/build-raditz-flight.cmd`: compila la DLL del prototipo usando MSVC.
+- `src/adventure/`: código C++ del prototipo de aventura de Raditz (cinemática, vuelo y ciclo Dragon Adventure).
+- `scripts/build-dbzbt3r.cmd`: compila la DLL del prototipo usando MSVC.
 - `assets/maps/earth/`: instrucciones y nombres de los recursos de mapa usados localmente; sus archivos derivados no se publican.
 - `tools/map-conversion/`: contiene el código de conversión y exportación del mapa.
 - `assets/README.md`: indica cómo manejar otros archivos locales del juego y recursos.
-- `external/local-only/`: instalación local de Tenkaichi3Decomp v0.1.39.6, paquete ejecutable de Raditz y archivos locales de BT2. Esta carpeta está ignorada por Git.
+- `external/local-only/`: instalación local de Tenkaichi3Decomp v0.1.39.6, paquete ejecutable de DBZBT3R y archivos locales de BT2. Esta carpeta está ignorada por Git.
 
 ## Compilación
 
-Instala Visual Studio Build Tools 2022 con la carga de trabajo **Desarrollo para el escritorio con C++** y ejecuta `scripts/build-raditz-flight.cmd`. El resultado se guarda en `build/RaditzIntro.dll`; si existe el paquete local, el script también copia la DLL nueva a `external/local-only/Raditz-Vuelo/` para que el lanzador pruebe esa compilación.
+Instala Visual Studio Build Tools 2022 con la carga de trabajo **Desarrollo para el escritorio con C++** y ejecuta `scripts/build-dbzbt3r.cmd`. El resultado se guarda en `build/DBZBT3R.dll`; si existe el paquete local, el script también copia la DLL nueva a `external/local-only/DBZBT3R/` para que el lanzador pruebe esa compilación.
 
-El código se probó con Tenkaichi3Decomp para Windows x64 v0.1.39.6; el registro de la instalación confirma esa versión. Las direcciones internas pueden no servir con otras versiones. Los mapas extraídos y sus conversiones Blender/glTF se conservan localmente, pero no se incluyen en el repositorio público. La instalación decomp, la ISO, el video y el paquete binario Raditz están solo en `external/local-only/` y `.gitignore` evita que se suban a GitHub.
+El código se probó con Tenkaichi3Decomp para Windows x64 v0.1.39.6; el registro de la instalación confirma esa versión. Las direcciones internas pueden no servir con otras versiones. Los mapas extraídos y sus conversiones Blender/glTF se conservan localmente, pero no se incluyen en el repositorio público. La instalación decomp, la ISO, el video y el paquete binario de DBZBT3R están solo en `external/local-only/` y `.gitignore` evita que se suban a GitHub.
 
 ## Ejecutar la prueba local
 
-En esta computadora, ejecuta `external/local-only/Raditz-Vuelo/Jugar Raditz - Vuelo.cmd`. El lanzador usa los datos locales de `external/local-only/Tenkaichi3Decomp-v0.1.39.6/gamedata`; el paquete Raditz contiene la DLL, `raditz-earth.unk` y `radditz.mp4`. No se debe esperar que funcione desde un clon de GitHub sin instalar los archivos requeridos en `external/local-only/`.
+En esta computadora, ejecuta `external/local-only/DBZBT3R/DBZBT3R.cmd`. El lanzador usa los datos locales de `external/local-only/Tenkaichi3Decomp-v0.1.39.6/gamedata`; el paquete DBZBT3R contiene la DLL, `earth-adventure-map.unk` y `saiyan-pod-landing.mp4`. No se debe esperar que funcione desde un clon de GitHub sin instalar los archivos requeridos en `external/local-only/`.
 
 ## Prototipo actual
 
-La prueba reproduce un video de Raditz, carga un mapa de vuelo de la Tierra convertido y después llega a la misión nativa de Raditz de Budokai Tenkaichi 3. El mapa todavía no tiene colisiones adecuadas y el vuelo, el punto de aparición y algunos aspectos visuales necesitan correcciones. El resto de este README documenta el estado y el flujo planeado de la Saga Saiyajin.
+La prueba reproduce un video de Raditz, carga el mapa de la Tierra convertido y permite volar con Raditz desde el cráter de su cápsula hasta un destino provisional que abre la misión nativa. Hay tres velocidades, un marcador con su icono y una primera colisión generada a partir de la geometría visible. Las colisiones, el vuelo y el recorrido completo desde el nuevo punto de aparición aún requieren pruebas y ajustes. El minimapa y la secuencia narrativa ampliada siguen pendientes.
 
 ## Código y recursos
 
@@ -35,7 +35,7 @@ Los archivos de mapa derivados de Budokai Tenkaichi 2 se mantienen en la copia l
 
 DRAGON BALL Z BUDOKAI TENKAICHI 3: REFORGED
 BITÁCORA DEL ESTADO ACTUAL, LINEA DE TIEMPO Y NOTAS
-Actualizado: 9 de noviembre de 2026
+Actualizado: 10 de noviembre de 2026
 
 ============================================================
 1. PROPÓSITO DE ESTE DOCUMENTO
@@ -66,7 +66,7 @@ Hito 1 - Definicion de la idea
 Se planteo ampliar una misión de la historia de Budokai Tenkaichi 3 para insertar escenas cinematograficas y tramos de exploración entre los momentos narrativos y los combates.
 
 Hito 2 - Primera prueba con una cinemática
-Se uso un fragmento del anime, específicamente la llega de radditz a la tierra para comprobar si podia reproducirse antes del combate nativo de la misión. Se comprobo que la cinemática se reproduce al iniciar la misión y que Enter permite saltarla.
+Se uso un fragmento del anime, específicamente la llegada de Raditz a la Tierra para comprobar si podia reproducirse antes del combate nativo de la misión. Se comprobo que la cinemática se reproduce al iniciar la misión y que Enter permite saltarla.
 
 Hito 3 - Busqueda de una base para el escenario
 Se compararon las posibilidades de usar escenarios de Budokai 3 y Budokai Tenkaichi 2. Se eligio el mapa de aventura de la Tierra de Budokai Tenkaichi 2 como base técnica para probar el vuelo dentro del flujo de Budokai Tenkaichi 3.
@@ -106,6 +106,8 @@ La prueba actual demuestra integración basica de cinemática, escenario de vuel
 4. FALLAS Y TRABAJO TECNICO PENDIENTE
 ============================================================
 
+Los puntos siguientes son un registro histórico de fallas detectadas en la primera prueba; consulta los objetivos de la sección 5 para su estado actual. La colisión y el vuelo actuales son implementaciones iniciales que necesitan más validación.
+
 1. El mundo no tiene colisión funcional.
 El escenario no proporciona las colisiónes necesarias para el recorrido. Hace falta crear o adaptar colisiónes para el terreno y los obstáculos.
 
@@ -130,38 +132,38 @@ Descompilar o analizar Budokai Tenkaichi 2 para entender como gestiona su mundo 
 8. Arreglar la colisión con el suelo.
 El personaje debe interactuar correctamente con la superficie del mapa y no atravesarla ni quedar en una posicion incorrecta.
 
-Estos puntos son problemás conocidos o tareas técnicas; aún no se consideran resueltos.
+Los puntos anteriores describen el estado histórico de la primera prueba; algunos ya se abordaron como se indica en la lista siguiente.
 
 ============================================================
 ============================================================
 5. OBJETIVOS ORDENADOS POR IMPORTANCIA
 ============================================================
 
-Marca cada objetivo cuando este completado. La lista esta ordenada de mayor a menor prioridad.
+Marca cada objetivo cuando esté completado. La lista está ordenada de mayor a menor prioridad. Las soluciones provisionales que requieren validación siguen sin marcar.
 
-[ ] Corregir el vuelo y el control del personaje en el mapa.
-[ ] Crear colisiones funcionales para el suelo y el terreno.
-[ ] Colocar el punto de aparicion junto a la capsula de Raditz.
-[ ] Controlar a Raditz durante el primer tramo de exploracion.
-[ ] Analizar en Budokai Tenkaichi 2 como se gestionan el mundo y el vuelo.
-[ ] Abrir el mapa navegable con minimapa despues de la escena de llegada de la capsula.
-[ ] Investigar en Shin Budokai como funciona la vision del rastreador.
-[ ] Implementar la activacion del rastreador y la deteccion del primer objetivo.
-[ ] Agregar la cinematica de llegada al encuentro con Piccolo.
-[ ] Agregar el combate de Raditz contra Piccolo.
-[ ] Reproducir la cinematica posterior al combate y volver al mapa.
-[ ] Bloquear el indicador de Goku hasta usar el rastreador y completar la pelea contra Piccolo.
-[ ] Mostrar a Goku como objetivo del rastreador en direccion a Kame House.
-[ ] Agregar la cinematica de llegada de Raditz a Kame House.
-[ ] Agregar el combate de Raditz contra Goku en Kame House.
-[ ] Reproducir la escena de Raditz marchandose y volver al mapa.
-[ ] Colocar a Goku y Piccolo sobre Kame House para el tramo final de exploracion.
-[ ] Mostrar el indicador de Raditz y cargar al llegar la pelea nativa de Budokai Tenkaichi 3.
-[ ] Reproducir la cinematica de cierre con la muerte de Raditz y Piccolo llevandose a Gohan.
-[ ] Corregir el desenfoque o deterioro visual durante el vuelo rapido.
-[ ] Reemplazar el indicador C provisional por un marcador mas profesional.
-[ ] Buscar en otro juego un mapa adecuado para incluir Namek en una etapa futura.
-[ ] A largo plazo, reemplazar los modelos 3D de personajes, habilidades y escenarios.
+- [ ] Corregir el vuelo y el control del personaje en el mapa.
+- [ ] Crear colisiones funcionales para el suelo y el terreno.
+- [x] Colocar el punto de aparición junto a la cápsula de Raditz. (Prototipo: sobre el cráter identificado.)
+- [x] Controlar a Raditz durante el primer tramo de exploración.
+- [ ] Analizar en Budokai Tenkaichi 2 como se gestionan el mundo y el vuelo.
+- [ ] Abrir el mapa navegable con minimapa despues de la escena de llegada de la capsula.
+- [ ] Investigar en Shin Budokai como funciona la vision del rastreador.
+- [ ] Implementar la activacion del rastreador y la deteccion del primer objetivo.
+- [ ] Agregar la cinematica de llegada al encuentro con Piccolo.
+- [ ] Agregar el combate de Raditz contra Piccolo.
+- [ ] Reproducir la cinematica posterior al combate y volver al mapa.
+- [ ] Bloquear el indicador de Goku hasta usar el rastreador y completar la pelea contra Piccolo.
+- [ ] Mostrar a Goku como objetivo del rastreador en direccion a Kame House.
+- [ ] Agregar la cinematica de llegada de Raditz a Kame House.
+- [ ] Agregar el combate de Raditz contra Goku en Kame House.
+- [ ] Reproducir la escena de Raditz marchandose y volver al mapa.
+- [ ] Colocar a Goku y Piccolo sobre Kame House para el tramo final de exploracion.
+- [ ] Mostrar el indicador de Raditz y cargar al llegar la pelea nativa de Budokai Tenkaichi 3.
+- [ ] Reproducir la cinematica de cierre con la muerte de Raditz y Piccolo llevandose a Gohan.
+- [ ] Corregir el desenfoque o deterioro visual durante el vuelo rapido.
+- [x] Reemplazar el indicador C provisional por un marcador más profesional. (Icono de Raditz.)
+- [ ] Buscar en otro juego un mapa adecuado para incluir Namek en una etapa futura.
+- [ ] A largo plazo, reemplazar los modelos 3D de personajes, habilidades y escenarios.
 6. NOTAS DE DISENO: SAGA SAIYAJIN
 ============================================================
 

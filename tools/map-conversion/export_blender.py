@@ -9,6 +9,8 @@ import struct
 
 from PIL import Image
 
+from convert_earth import geometry_chains, pointer, vertex_batches, word
+
 
 GROUPS = (
     "Cielo y fondo", "Mar lejano", "Terreno, edificios y vegetación",
@@ -20,14 +22,6 @@ BLOCK32 = (
     (8, 9, 12, 13, 24, 25, 28, 29), (10, 11, 14, 15, 26, 27, 30, 31),
 )
 BLOCK16 = tuple(tuple(BLOCK32[x][y] for x in range(4)) for y in range(8))
-
-
-def word(data, offset):
-    return struct.unpack_from("<I", data, offset)[0]
-
-
-def pointer(data, offset):
-    return word(data, offset) * 4
 
 
 def gs_offset_32(x, y, width):
@@ -103,50 +97,14 @@ def texture_image(data, entry):
     return Image.frombytes("RGBA", (w, h), bytes(rgba))
 
 
-def strips(data, chain):
-    tag = word(data, chain)
-    if tag >> 28 != 6:  # DMA RET with an inline VIF stream
-        raise ValueError("Unsupported Earth DMA chain")
-    offset = chain + 8
-    end = chain + 16 + (tag & 0xFFFF) * 16
-    gif_tag = 0
-    while offset < end:
-        command = word(data, offset)
-        offset += 4
-        opcode = command >> 24 & 127
-        if opcode in (0, 0x17):  # NOP and MSCNT
-            continue
-        if opcode != 0x6C:  # UNPACK V4-32
-            raise ValueError(f"Unsupported VIF opcode {opcode:#x}")
-        count = (command >> 16 & 255) or 256
-        address = command & 1023
-        if offset + count * 16 > end:
-            raise ValueError("Truncated VIF upload")
-        if address == 0 and count == 3:
-            gif_tag, = struct.unpack_from("<Q", data, offset + 32)
-        elif address == 3:
-            vertices = gif_tag & 0x7FFF
-            if gif_tag >> 47 & 7 != 4 or vertices * 3 != count:
-                raise ValueError("Unexpected stage primitive")
-            yield tuple(struct.iter_unpack("<12f", data[offset:offset + count * 16]))
-        offset += count * 16
-
-
 def unpack_geometry(data):
     by_group = {}
-    groups = pointer(data, 0x1C)
     for group, name in enumerate(GROUPS):
         materials = defaultdict(list)
-        _, count, offset = struct.unpack_from("<HHI", data, groups + group * 8)
-        for i in range(count):
-            texture, meshes, mesh_offset, animation = struct.unpack_from("<HHII", data, offset * 4 + i * 16)
-            if animation:
-                raise ValueError("Unexpected animated Earth texture")
-            for mesh in range(meshes):
-                desc = mesh_offset * 4 + mesh * 16
-                if data[desc + 3] != 0:
-                    raise ValueError("Unexpected Earth mesh program")
-                materials[texture].extend(strips(data, pointer(data, desc + 8)))
+        for texture, chain in geometry_chains(data, group):
+            for offset, vertices in vertex_batches(data, chain):
+                batch = tuple(struct.iter_unpack("<12f", data[offset:offset + vertices * 48]))
+                materials[texture].append(batch)
         by_group[name] = materials
     return by_group
 
