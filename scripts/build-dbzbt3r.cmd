@@ -11,7 +11,7 @@ if errorlevel 1 (
 )
 if not exist build mkdir build
 pushd build
-cl /nologo /std:c++17 /O2 /W4 /EHsc /MT /DRADITZ_FLIGHT /LD "..\src\adventure\intro_video.cpp" "..\src\adventure\flight.cpp" /link /OUT:DBZBT3R.dll /IMPLIB:DBZBT3R.lib mfplay.lib ole32.lib user32.lib
+cl /nologo /std:c++17 /O2 /W4 /EHsc /MT /DRADITZ_FLIGHT /LD "..\src\adventure\intro_video.cpp" "..\src\adventure\flight.cpp" "..\src\adventure\adventure_loader.cpp" /link /OUT:DBZBT3R.dll /IMPLIB:DBZBT3R.lib mfplay.lib ole32.lib user32.lib
 set "result=%errorlevel%"
 popd
 if not "%result%"=="0" exit /b %result%

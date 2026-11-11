@@ -1,269 +1,177 @@
 # Dragon Ball Z Budokai Tenkaichi 3: Reforged
 
-Repositorio del código fuente y la documentación del proyecto fan **Dragon Ball Z Budokai Tenkaichi 3: Reforged**. No está afiliado ni cuenta con el respaldo de los titulares de los derechos.
+Proyecto fan basado en Tenkaichi3Decomp que busca ampliar el modo historia de **Dragon Ball Z: Budokai Tenkaichi 3** con exploración, escenas y combates más fieles a la historia. No está afiliado ni cuenta con el respaldo de los titulares de los derechos.
 
-## Estructura
+**Prioridad actual:** construir y mejorar la jugabilidad del modo historia, empezando por la llegada de Raditz y la saga saiyajin. El alcance futuro incluye Dragon Ball clásico, Z, GT y Super.
 
-- `README.md`: estado actual, línea de tiempo, objetivos y notas de diseño de la Saga Saiyajin.
-- `src/adventure/`: código C++ del prototipo de aventura de Raditz (cinemática, vuelo y ciclo Dragon Adventure).
-- `scripts/build-dbzbt3r.cmd`: compila la DLL del prototipo usando MSVC.
-- `assets/maps/earth/`: instrucciones y nombres de los recursos de mapa usados localmente; sus archivos derivados no se publican.
-- `tools/map-conversion/`: contiene el código de conversión y exportación del mapa.
-- `assets/README.md`: indica cómo manejar otros archivos locales del juego y recursos.
-- `external/local-only/`: instalación local de Tenkaichi3Decomp v0.1.39.6, paquete ejecutable de DBZBT3R y archivos locales de BT2. Esta carpeta está ignorada por Git.
+Actualizado: 10 de noviembre de 2026.
 
-## Compilación
+## Estado actual
 
-Instala Visual Studio Build Tools 2022 con la carga de trabajo **Desarrollo para el escritorio con C++** y ejecuta `scripts/build-dbzbt3r.cmd`. El resultado se guarda en `build/DBZBT3R.dll`; si existe el paquete local, el script también copia la DLL nueva a `external/local-only/DBZBT3R/` para que el lanzador pruebe esa compilación.
+El prototipo de la misión de Raditz sigue esta secuencia:
 
-El código se probó con Tenkaichi3Decomp para Windows x64 v0.1.39.6; el registro de la instalación confirma esa versión. Las direcciones internas pueden no servir con otras versiones. Los mapas extraídos y sus conversiones Blender/glTF se conservan localmente, pero no se incluyen en el repositorio público. La instalación decomp, la ISO, el video y el paquete binario de DBZBT3R están solo en `external/local-only/` y `.gitignore` evita que se suban a GitHub.
+**Confirmar la misión → reproducir u omitir el MP4 de llegada → explorar como Raditz → confirmar el encuentro con Piccolo → controlar a Piccolo contra Raditz → volver al mapa como Raditz.**
 
-## Ejecutar la prueba local
+La exploración usa el mapa de Dragon Adventure de BT2, convertido a BT3 y escalado al doble de su tamaño original. Raditz aparece sobre el cráter de su cápsula, en la zona identificada en el mapa. La vista actual muestra simultáneamente los iconos de Piccolo, Goku y Raditz en los puntos investigados de BT2. El encuentro de Piccolo ya se puede disputar; las demás peleas y la secuencia completa de la saga siguen pendientes.
 
-En esta computadora, ejecuta `external/local-only/DBZBT3R/DBZBT3R.cmd`. El lanzador usa los datos locales de `external/local-only/Tenkaichi3Decomp-v0.1.39.6/gamedata`; el paquete DBZBT3R contiene la DLL, `earth-adventure-map.unk` y `saiyan-pod-landing.mp4`. No se debe esperar que funcione desde un clon de GitHub sin instalar los archivos requeridos en `external/local-only/`.
+Adventure se abre desde el despachador de la misión antes de `Battle_Main` y tiene un ciclo de actualización y dibujo propio. En la versión compatible, el cargador de `src/adventure/adventure_loader.cpp` reproduce la preparación necesaria para un solo personaje y su descarga, sin ejecutar el trabajo inicial del cargador de combate. Las peleas siguen usando su carga original. Se reutilizan servicios y recursos internos de BT3 para archivos, guion, modelos, animaciones, sonido, escenario, cámara y efectos; por ello Adventure todavía depende del motor y de la estructura de esta versión del ejecutable. Si no puede instalarse el trabajo propio, existe una ruta de compatibilidad con el cargador nativo. Al salir se restaura la configuración de la misión. Véase [cargador propio de Adventure](docs/research/cargador-adventure.md).
 
-## Prototipo actual
+### Funciones implementadas
 
-La prueba reproduce un video de Raditz, carga el mapa de la Tierra convertido y permite volar con Raditz desde el cráter de su cápsula hasta un destino provisional que abre la misión nativa. Hay tres velocidades, un marcador con su icono y una primera colisión generada a partir de la geometría visible. Las colisiones, el vuelo y el recorrido completo desde el nuevo punto de aparición aún requieren pruebas y ajustes. El minimapa y la secuencia narrativa ampliada siguen pendientes.
+- Cinemática MP4 de llegada de Raditz; Enter permite omitirla.
+- Lanzador que salta las presentaciones del juego y abre directamente el menú configurado.
+- Mapa de la Tierra de BT2 navegable, con versiones locales para Blender y glTF.
+- Raditz como personaje controlable en el tramo de exploración y punto de aparición sobre el cráter de su cápsula.
+- Cámara de seguimiento y cambio de orientación durante el vuelo.
+- Tres velocidades: movimiento normal; movimiento rápido con dirección y botón X; y turbo mientras se mantiene L2. U ya no activa el turbo.
+- Animaciones nativas para el vuelo rápido, el turbo y subir o bajar; impulso inicial, líneas blancas y sonido de inicio para el vuelo rápido. El turbo usa sus propios efectos.
+- Malla de colisión inicial generada a partir de la geometría visible de la Tierra, consultada para el suelo, el movimiento y la cámara. El mar sin geometría usa un nivel provisional.
+- Iconos de Piccolo, Goku y Raditz en las posiciones de los marcadores de BT2, con posición suavizada. Los iconos se ocultan cuando el destino está detrás de la cámara.
+- Al llegar al marcador de Piccolo, Enter o START inicia un combate de Piccolo controlable contra Raditz. Al terminar, la aventura vuelve al mapa como Raditz; una victoria se guarda para no repetirla. La pelea final nativa todavía no está conectada a la nueva progresión.
+- Desactivación del desenfoque de distancia heredado por el mapa y de partículas de clima de la plantilla que seguían a la cámara.
 
-## Código y recursos
+### Qué se ha comprobado y qué falta probar
 
-Los archivos de mapa derivados de Budokai Tenkaichi 2 se mantienen en la copia local y están excluidos de Git. Se publican el código y las herramientas para que cada colaborador genere los recursos usando sus propios archivos de juego. No subas imágenes ISO, videos, partidas guardadas ni ejecutables compilados.
+Se ha visto a Raditz aparecer sobre el cráter y volar en Adventure. Se comprobaron las tres velocidades, las líneas de movimiento y el cambio del marcador mediante pruebas aisladas; la sensación de vuelo, el sonido y la estabilidad del icono deben seguir evaluándose al jugar.
 
+Una prueba con Raditz en Adventure y el punto de aparición anterior llegó a la escena de combate nativa con Goku. **Aún queda repetir el recorrido completo desde el nuevo punto de aparición**, confirmar el destino y comprobar la pelea y sus efectos. La colisión existe, pero necesita una revisión manual del terreno, los edificios, la vegetación, los huecos y el agua. El desenfoque de distancia se corrigió; la posible pérdida de claridad durante el movimiento rápido sigue por evaluar por separado.
 
----
+## Objetivos
 
-DRAGON BALL Z BUDOKAI TENKAICHI 3: REFORGED
-BITÁCORA DEL ESTADO ACTUAL, LINEA DE TIEMPO Y NOTAS
-Actualizado: 10 de noviembre de 2026
+Las casillas marcadas indican que existe una primera implementación o investigación concreta. Las tareas de pulido y validación de esa implementación aparecen por separado para que puedan tacharse cuando se completen.
 
-============================================================
-1. PROPÓSITO DE ESTE DOCUMENTO
-============================================================
+### Base de Adventure y estabilidad
 
-Este documento registra el trabajo construido hasta ahora para el mod, el orden en que se fueron alcanzando los hitos y las notas de diseño para la Saga Saiyajin. Distingue entre la prueba que existe actualmente, sus fallas conocidas y el flujo que se quiere construir después.
-
-El alcance global del proyecto comprende Dragon Ball clásico, Dragon Ball Z, Dragon Ball GT y Dragon Ball Super. El desarrollo actual se concentra en la jugabilidad del modo historia, empezando por la Saga Saiyajin y el episodio de Raditz. Namek también está incluido; su mapa se buscará y trabajará en una etapa posterior.
-
-Juegos elegidos como referencias de diseño:
-- Dragon Ball Z: Budokai 3
-- Dragon Ball Z: Infinite World
-- Dragon Ball Z: Budokai Tenkaichi 2
-- Dragon Ball: Raging Blast 2
-- Dragon Ball FighterZ
-- Dragon Ball: Sparking! ZERO
-- Shin Budokai, específicamente como referencia a consultar para el rastreador
-
-Las referencias sirven para estudiar ideas de exploración, navegación, presentacion y combate. No implican copiar recursos ni sistemás completos.
-
-============================================================
-2. LINEA DE TIEMPO DEL PROYECTO
-============================================================
-
-La secuencia siguiente recoge los hitos en el orden en que ocurrieron. No se asignan fechas individuales porque no se conservaron fechas verificables para cada paso.
-
-Hito 1 - Definicion de la idea
-Se planteo ampliar una misión de la historia de Budokai Tenkaichi 3 para insertar escenas cinematograficas y tramos de exploración entre los momentos narrativos y los combates.
-
-Hito 2 - Primera prueba con una cinemática
-Se uso un fragmento del anime, específicamente la llegada de Raditz a la Tierra para comprobar si podia reproducirse antes del combate nativo de la misión. Se comprobo que la cinemática se reproduce al iniciar la misión y que Enter permite saltarla.
-
-Hito 3 - Busqueda de una base para el escenario
-Se compararon las posibilidades de usar escenarios de Budokai 3 y Budokai Tenkaichi 2. Se eligio el mapa de aventura de la Tierra de Budokai Tenkaichi 2 como base técnica para probar el vuelo dentro del flujo de Budokai Tenkaichi 3.
-
-Hito 4 - Extraccion del mapa de Budokai Tenkaichi 2
-Se localizo el escenario de la Tierra dentro de los datos de la ISO de Budokai Tenkaichi 2. Se extrajeron sus datos y se preparo una conversión para poder inspeccionarlo y usarlo en la prueba de Budokai Tenkaichi 3.
-
-Hito 5 - Inspección del escenario en Blender
-Se convirtió el escenario a formatos visibles en herramientas de modelado 3D. Se preparo una versión Blender para inspeccion visual y una versión glTF. Al alejar la vista en Blender, la malla se veía seleccionada en naranja y el encuadre/clipping dificultaba verla; se ajustó el archivo de inspeccion para facilitar la vista general y se explicaron controles de visualizacion.
-
-Hito 6 - Integracion del escenario en la misión de Raditz
-Se integro el mapa de vuelo en el recorrido de la misión de Raditz, en sustitucion del flujo anterior de cinemática seguida directamente por la pelea. Se conservaron los datos del escenario de combate original para que la misión pudiera llegar al combate nativo.
-
-Hito 7 - Prueba del flujo de cinemática, mapa y combate
-Se comprobo el flujo actual:
-escena de entrada de Raditz -> mapa navegable -> misión nativa de Budokai Tenkaichi 3.
-La prueba permitió confirmar que el escenario puede cargarse en el recorrido de una misión y que luego se puede alcanzar el combate nativo. El usuario confirmo que el mapa no trae colisiónes utilizables para el movimiento deseado, pero considero que la prueba demuestra que el objetivo general es posible.
-
-Estado al cierre de esta bitacora
-Hay una prueba funcional de una cinemática inicial, un tramo de vuelo en el mapa adaptado de Budokai Tenkaichi 2 y la entrada posterior a la misión/pelea nativa de Budokai Tenkaichi 3 contra Raditz. La secuencia narrativa ampliada descrita en las notas aún no esta construida.
-
-============================================================
-3. LO QUE ESTA CONSTRUIDO Y COMPROBADO
-============================================================
-
-- Una cinemática MP4 de entrada para la misión de Raditz.
-- La opción de saltar la cinemática con Enter.
-- Carga de un escenario de vuelo derivado del mapa de aventura de la Tierra de Budokai Tenkaichi 2.
-- Un tramo de movimiento navegable dentro de ese escenario.
-- Una transición desde el tramo de mapa hacia el contenido nativo de Budokai Tenkaichi 3 para Raditz.
-- Una copia de trabajo del mod y sus archivos de compilacion en la carpeta de salida del proyecto.
-- Una versión del mapa preparada para inspeccion en Blender y otra versión glTF.
-
-La prueba actual demuestra integración basica de cinemática, escenario de vuelo y combate nativo. No equivale a un mundo abierto completo ni a la secuencia narrativa final de la Saga Saiyajin.
-
-============================================================
-4. FALLAS Y TRABAJO TECNICO PENDIENTE
-============================================================
-
-Los puntos siguientes son un registro histórico de fallas detectadas en la primera prueba; consulta los objetivos de la sección 5 para su estado actual. La colisión y el vuelo actuales son implementaciones iniciales que necesitan más validación.
-
-1. El mundo no tiene colisión funcional.
-El escenario no proporciona las colisiónes necesarias para el recorrido. Hace falta crear o adaptar colisiónes para el terreno y los obstáculos.
-
-2. Desenfoque de movimiento / visualizacion durante el movimiento rápido.
-Cuando el jugador se desplaza muy rápido, el mapa se ve mal o borroso. Hay que identificar si el origen esta en el efecto de movimiento, la cámara, la carga/renderizado del mapa u otra parte del juego.
-
-3. Control del personaje al voltar parcialmente bugeado.
-al moverse en multiples direcciones el personaje no respeta ciertas direcciones en especifico, aúnque vuela en esa dirección el personaje no se inclina hacia ahi, el frente la mayoria del tiempo termina mirando hacia otro lado. 
-
-4. El personaje controlado debe ser Raditz.
-La prueba debe reemplazar a Goku por Raditz durante el tramo de exploración correspondiente. Esto incluye comprobar modelo, animacion, posicion y control.
-
-5. La posicion inicial (spawn) es incorrecta.
-El punto de aparición debe colocarse junto a la cápsula de Raditz en el mapa, segun el flujo narrativo previsto.
-
-6. El indicador C es provisiónal.
-Debe sustituirse por un indicador más profesional y coherente con la interfaz del juego.
-
-7. Mejorar el sistema de vuelo estudiando Budokai Tenkaichi 2.
-Descompilar o analizar Budokai Tenkaichi 2 para entender como gestiona su mundo de aventura, el desplazamiento, la cámara y el vuelo. Aplicar lo aprendido a la implementación actual cuando sea viable.
-
-8. Arreglar la colisión con el suelo.
-El personaje debe interactuar correctamente con la superficie del mapa y no atravesarla ni quedar en una posicion incorrecta.
-
-Los puntos anteriores describen el estado histórico de la primera prueba; algunos ya se abordaron como se indica en la lista siguiente.
-
-============================================================
-============================================================
-5. OBJETIVOS ORDENADOS POR IMPORTANCIA
-============================================================
-
-Marca cada objetivo cuando esté completado. La lista está ordenada de mayor a menor prioridad. Las soluciones provisionales que requieren validación siguen sin marcar.
-
-- [ ] Corregir el vuelo y el control del personaje en el mapa.
-- [ ] Crear colisiones funcionales para el suelo y el terreno.
-- [x] Colocar el punto de aparición junto a la cápsula de Raditz. (Prototipo: sobre el cráter identificado.)
+- [x] Reproducir una cinemática de llegada de Raditz antes de la exploración y permitir omitirla con Enter.
+- [x] Extraer y convertir el mapa de la Tierra de BT2 para usarlo en el prototipo.
+- [x] Preparar versiones del mapa para inspeccionarlo en Blender y glTF.
+- [x] Saltar las presentaciones y llegar más rápido al menú del juego desde el lanzador.
+- [x] Iniciar el ciclo de Adventure antes de `Battle_Init` y devolver después el control al inicio de la pelea.
 - [x] Controlar a Raditz durante el primer tramo de exploración.
-- [ ] Analizar en Budokai Tenkaichi 2 como se gestionan el mundo y el vuelo.
-- [ ] Abrir el mapa navegable con minimapa despues de la escena de llegada de la capsula.
-- [ ] Investigar en Shin Budokai como funciona la vision del rastreador.
-- [ ] Implementar la activacion del rastreador y la deteccion del primer objetivo.
-- [ ] Agregar la cinematica de llegada al encuentro con Piccolo.
-- [ ] Agregar el combate de Raditz contra Piccolo.
-- [ ] Reproducir la cinematica posterior al combate y volver al mapa.
-- [ ] Bloquear el indicador de Goku hasta usar el rastreador y completar la pelea contra Piccolo.
-- [ ] Mostrar a Goku como objetivo del rastreador en direccion a Kame House.
-- [ ] Agregar la cinematica de llegada de Raditz a Kame House.
-- [ ] Agregar el combate de Raditz contra Goku en Kame House.
-- [ ] Reproducir la escena de Raditz marchandose y volver al mapa.
-- [ ] Colocar a Goku y Piccolo sobre Kame House para el tramo final de exploracion.
-- [ ] Mostrar el indicador de Raditz y cargar al llegar la pelea nativa de Budokai Tenkaichi 3.
-- [ ] Reproducir la cinematica de cierre con la muerte de Raditz y Piccolo llevandose a Gohan.
-- [ ] Corregir el desenfoque o deterioro visual durante el vuelo rapido.
-- [x] Reemplazar el indicador C provisional por un marcador más profesional. (Icono de Raditz.)
-- [ ] Buscar en otro juego un mapa adecuado para incluir Namek en una etapa futura.
-- [ ] A largo plazo, reemplazar los modelos 3D de personajes, habilidades y escenarios.
-6. NOTAS DE DISENO: SAGA SAIYAJIN
-============================================================
+- [x] Colocar el punto de aparición sobre el cráter de la cápsula de Raditz.
+- [x] Implementar movimiento y orientación del personaje en el mapa.
+- [x] Implementar las tres velocidades de vuelo, sus animaciones y el impulso inicial del vuelo rápido.
+- [x] Añadir animaciones al subir y bajar durante la exploración.
+- [x] Añadir líneas de movimiento y sonido de inicio al vuelo rápido.
+- [x] Crear una primera malla de colisión del suelo y los objetos a partir del mapa visible.
+- [x] Reemplazar el indicador C por un icono de Raditz y suavizar su movimiento.
+- [x] Probar la confirmación de un destino y su conexión con la misión nativa de Raditz en la versión anterior.
+- [x] Localizar en BT2 y mostrar los puntos de Piccolo, Kame House y el encuentro final con Raditz.
+- [ ] Integrar de nuevo la confirmación y la pelea nativa en la progresión definitiva de los marcadores.
+- [x] Corregir el desenfoque de distancia heredado por el mapa de Adventure.
+- [x] Investigar y documentar el flujo de historia, mapa y eventos de BT2 con las fuentes disponibles.
+- [ ] Repetir la ruta completa desde el nuevo punto de aparición hasta la pelea y comprobar la restauración de la misión.
+- [ ] Probar y ajustar el vuelo, el giro, la cámara, las animaciones y los sonidos en condiciones normales de juego.
+- [ ] Revisar y corregir las colisiones del terreno, edificios, vegetación, agua y límites del mapa.
+- [ ] Evaluar y corregir el deterioro visual que aún pueda ocurrir durante el vuelo rápido.
+- [ ] Profundizar en el código de BT2 para recuperar los detalles de vuelo, cámara, llegada a destinos y gestión del mundo que todavía no se conocen.
+- [ ] Reducir la dependencia de recursos de combate y avanzar hacia un sistema de Adventure independiente.
+- [ ] Añadir el minimapa de BT2 con la posición del personaje y los indicadores correspondientes.
 
-Este apartado registra el flujo narrativo y jugable deseado para la llegada de Raditz. Los pasos siguientes son planes, no funciones que ya existan en la prueba actual.
+### Saga saiyajin: episodio de Raditz
 
-A. Llegada de Raditz
+- [ ] Investigar la visión del rastreador de Shin Budokai como referencia.
+- [ ] Implementar la activación del rastreador y la primera detección, dirigida al encuentro con Piccolo.
+- [x] Añadir una cinemática antes del combate de Raditz contra Piccolo.
+- [x] Añadir el combate de Piccolo controlable contra Raditz y volver al mapa como Raditz.
+- [x] Guardar la victoria contra Raditz y permitir reintentar el encuentro si Piccolo pierde.
+- [x] Reproducir una cinemática después de ganar ese combate y regresar al mapa navegable.
+- [ ] Revelar el indicador de Goku mediante el rastreador solo después de completar la pelea contra Piccolo.
+- [x] Dirigir a Raditz hacia Kame House y reproducir la cinemática antes del combate.
+- [x] Añadir el combate de Raditz controlable contra Goku en el escenario de Kame House y guardar la victoria.
+- [x] Regresar al mapa como Goku tras ganar en Kame House.
+- [ ] Probar manualmente el combate de Kame House, su resultado y el regreso al mapa.
+- [x] Reproducir la escena posterior a la victoria en Kame House y regresar al mapa.
+- [ ] Comenzar el tramo final sobre Kame House con Goku controlable y Piccolo a su lado.
+- [ ] Mostrar a Raditz como objetivo durante el tramo final y conectar ese encuentro con la pelea nativa de BT3.
+- [ ] Reproducir la cinemática de la muerte de Raditz y de Piccolo llevándose a Gohan.
+- [ ] Rehacer el combate final para incluir a Goku y Piccolo contra Raditz y la intervención de Gohan.
 
-1. Reproducir la escena de la cápsula de Raditz llegando al planeta.
-2. Abrir el mapa navegable con minimapa.
-3. Hacer aparecer al jugador justo en el lugar donde esta la cápsula de Raditz en el mapa.
-4. Permitir presionar un boton para abrir la visión del rastreador.
-5. Consultar Shin Budokai como referencia para investigar como implementar la visión/interfaz del rastreador.
+### Objetivos posteriores
 
-B. Primera deteccion y encuentro con Piccolo
+- [ ] Desarrollar las demás sagas, empezando por el resto de Dragon Ball Z.
+- [ ] Buscar y adaptar un mapa de Namek de otro juego.
+- [ ] Ampliar el modo historia a Dragon Ball clásico, GT y Super.
+- [ ] Sustituir progresivamente los fragmentos del anime por escenas creadas con el motor del juego.
+- [ ] Rehacer los combates necesarios para representar mejor los acontecimientos de cada saga.
+- [ ] A largo plazo, reemplazar modelos 3D de personajes, habilidades y escenarios.
 
-6. La primera deteccion del rastreador debe conducir a un nuevo combate: Raditz contra Piccolo.
-7. Al llegar al punto de encuentro con Piccolo, reproducir una cinemática MP4.
-8. Al terminar la cinemática, iniciar el combate de Raditz contra Piccolo.
-9. Al terminar el combate, reproducir otra cinemática.
-10. Al terminar esa segunda cinemática, regresar al mapa navegable.
+## Diseño previsto: llegada de Raditz
 
-C. Deteccion de Goku y Kame House
+1. Reproducir la llegada de la cápsula y abrir el mapa con minimapa; Raditz aparece junto al lugar de impacto.
+2. El jugador activa el rastreador. La primera detección conduce a Piccolo, donde una cinemática da paso a un combate nuevo entre Raditz y Piccolo.
+3. Tras el combate y otra cinemática, regresar al mapa. Al usar de nuevo el rastreador se revela a Goku y el trayecto hacia Kame House.
+4. Reproducir la llegada a Kame House, disputar un combate nuevo entre Raditz y Goku y mostrar a Raditz marchándose.
+5. Regresar al mapa sobre Kame House con Goku y Piccolo. El indicador de Raditz conduce al combate nativo de BT3, que más adelante se rehacerá para incluir la lucha conjunta y la intervención de Gohan.
+6. Después de la muerte de Raditz, mostrar su muerte y a Piccolo llevándose a Gohan. Con eso termina el episodio.
 
-11. Despues de completar la pelea contra Piccolo, el jugador podrá abrir de nuevo el rastreador orientado hacia Kame House.
-12. La deteccion debe revelar el indicador de Goku.
-13. El indicador de Goku tiene una condicion estricta: no puede aparecer antes de usar el rastreador y completar la pelea contra Piccolo. El combate de Piccolo debe haberse completado para habilitar esa deteccion.
-14. Reproducir la escena de Raditz llegando a Kame House.
-15. Iniciar en ese escenario un combate de Raditz contra Goku.
-16. Al terminar el combate, reproducir una escena de Raditz marchándose.
+**Regla de progresión:** el indicador de Goku no debe aparecer antes de que el jugador haya usado el rastreador y completado el combate contra Piccolo. Actualmente los tres indicadores permanecen visibles para pruebas, pero el combate de Kame House solo se puede activar después de ganar con Piccolo. Al ganar con Raditz, el progreso se guarda y se vuelve al mapa como Goku. El rastreador, Piccolo como acompañante y el combate final todavía están pendientes.
 
-D. Trayecto final hasta el combate nativo de Budokai Tenkaichi 3
+## Línea de tiempo
 
-17. Despues de la escena de Raditz marchándose, volver al mapa navegable.
-18. En este tramo, controlar a Goku y tener a Piccolo a su lado.
-19. Colocar al grupo justo encima de Kame House en el mapa.
-20. Mostrar un indicador de Raditz.
-21. Al llegar al indicador, cargar por fin la pelea nativa de Budokai Tenkaichi 3 contra Raditz.
+1. Se definió la idea de ampliar la historia de BT3 con cinemáticas, exploración y combates adicionales.
+2. Se reprodujo un MP4 de la llegada de Raditz antes de la pelea y se añadió la opción de omitirlo con Enter.
+3. Se eligió el mapa de Dragon Adventure de BT2; se extrajo, convirtió y preparó para inspección en Blender.
+4. Se integró una primera prueba de vuelo en la misión y se comprobó el flujo de mapa a pelea nativa.
+5. Se organizó el proyecto para trabajar desde el repositorio y se documentaron la arquitectura de BT2 y sus límites de lectura.
+6. Se adelantó el ciclo de Adventure para ejecutarlo antes de `Battle_Init`, con carga y descarga temporales de los recursos necesarios.
+7. Se ajustaron la cámara, el giro, el vuelo y las animaciones. Se añadieron tres velocidades, impulso, líneas y sonido de inicio.
+8. Se corrigieron el desenfoque de distancia y las partículas de clima heredadas; se creó una primera colisión basada en la geometría del mapa.
+9. Se sustituyó el marcador C por un icono de Raditz, se añadió confirmación al destino y se ajustó su comportamiento cuando queda detrás de la cámara.
+10. Se cambió el personaje controlable a Raditz y se ubicó su aparición sobre el cráter señalado. Está pendiente repetir desde ahí el recorrido completo hasta la pelea.
 
-E. Cierre del episodio
+## Referencias de diseño
 
-22. Despues de la muerte de Raditz, reproducir una cinemática que muestre su muerte y a Piccolo llevandose a Gohan.
-23. Finalizar aquí el episodio de Raditz.
+- Dragon Ball Z: Budokai 3.
+- Dragon Ball Z: Infinite World.
+- Dragon Ball Z: Budokai Tenkaichi 2.
+- Dragon Ball: Raging Blast 2.
+- Dragon Ball FighterZ.
+- Dragon Ball: Sparking! ZERO.
+- Shin Budokai, como referencia para el rastreador.
 
-============================================================
-7. REGLAS DE PROGRESIÓN QUE NO SE DEBEN PERDER
-============================================================
+El informe [Dragon Adventure de BT2: arquitectura aprovechable](docs/research/BT2-Dragon-Adventure-arquitectura.md) documenta el flujo que pudo estudiarse y las partes del código original que seguían sin ser legibles en la copia examinada. La [investigación de cámara y vuelo](docs/research/BT2-Dragon-Adventure-camera-flight.md) es una referencia histórica, no una descripción actualizada de todos los controles del prototipo. La [investigación del minimapa](docs/research/minimapa-bt2.md) registra lo que falta para incorporarlo.
 
-- El indicador de Goku esta bloqueado al inicio.
-- El indicador de Goku solo se habilita después de completar la pelea de Raditz contra Piccolo.
-- El rastreador es el medio para descubrir o revelar el objetivo; la progresión no debe mostrar el indicador de Goku antes de usarlo.
-- La escena en Kame House y su pelea ocurren antes del tramo final que conduce a la pelea nativa de Budokai Tenkaichi 3.
-- La pelea nativa de Budokai Tenkaichi 3 contra Raditz se reserva para el ultimo encuentro de la secuencia planificada.
-- La cinemática de cierre con la muerte de Raditz y Piccolo llevandose a Gohan ocurre después de esa pelea nativa.
+## Estructura del repositorio
 
-============================================================
-8. ORDEN DE PRIORIDADES SUGERIDO A PARTIR DE LAS NOTAS
-============================================================
+- `src/adventure/`: cinemática, ciclo de Adventure, controles, colisión y direcciones de funciones utilizadas por el prototipo.
+- `scripts/build-dbzbt3r.cmd`: compilación de la DLL con MSVC.
+- `assets/maps/earth/`: documentación y recursos locales del mapa de la Tierra.
+- `assets/ui/`: imágenes fuente de los marcadores de Piccolo, Goku y Raditz.
+- `tools/map-conversion/`: herramientas de conversión, exportación y generación de colisión y marcador.
+- `docs/`: manual de traspaso e investigaciones. El manual conserva pasos de una fase anterior; contrástalo con este estado y con el código antes de aplicarlo.
+- `external/local-only/`: instalación y recursos locales excluidos de Git.
 
-Prioridad 1 - Estabilizar la prueba existente:
-arreglar el vuelo, el spawn, el personaje controlado y la interacción con el suelo.
+## Compilar y ejecutar
 
-Prioridad 2 - Hacer recorrible el mapa:
-crear colisiónes de terreno y obstáculos, fijar límites y evaluar el aspecto visual durante el vuelo rápido.
+La versión usada para el prototipo es **Tenkaichi3Decomp Windows x64 v0.1.39.6**. Las direcciones internas del código pueden no funcionar con otras versiones.
 
-Prioridad 3 - Sustituir el indicador provisiónal:
-definir y probar un marcador legible y acorde al estilo de la interfaz.
+Instala Visual Studio Build Tools 2022 con **Desarrollo para el escritorio con C++** y ejecuta:
 
-Prioridad 4 - Estudiar el sistema de aventura de Budokai Tenkaichi 2 y la visión de rastreador de Shin Budokai:
-documentar comportamiento, controles, interfaz, orientación y condiciones de deteccion antes de implementarlos.
+```cmd
+scripts\build-dbzbt3r.cmd
+```
 
-Prioridad 5 - Construir la progresión por estados:
-cápsula -> primer rastreo -> Piccolo -> rastreo hacia Kame House -> Goku -> escena y combate en Kame House -> Raditz -> combate nativo -> cierre.
+La DLL se genera en `build/DBZBT3R.dll` y, si existe el paquete local, se copia a `external/local-only/DBZBT3R/`. En esta computadora se inicia mediante `external/local-only/DBZBT3R/DBZBT3R.cmd`.
 
-Prioridad 6 - Integrar las escenas y combates uno a uno:
-probar cada transición antes de conectar toda la secuencia.
+El progreso de este encuentro se guarda por separado de la partida original en `external/local-only/DBZBT3R/saves/dbzbt3r-progress.ini`. La victoria se registra solo cuando gana Piccolo; una derrota o una salida sin victoria no la completan.
 
-============================================================
-9. ALCANCE FUTURO
-============================================================
+Además de la instalación local de Tenkaichi3Decomp, el paquete necesita `earth-adventure-map.unk`, `earth-collision.bin`, `raditz-marker.bin`, `piccolo-marker.bin`, `goku-marker.bin` y, para la cinemática, `saiyan-pod-landing.mp4`. Las instrucciones para generar la colisión y el marcador están en [tools/map-conversion/README.md](tools/map-conversion/README.md). Un clon del repositorio no incluye por sí solo todos los archivos necesarios para jugar.
 
-La prioridad actual es desarrollar la jugabilidad del modo historia, empezando por la Saga Saiyajin y el episodio de Raditz. El alcance futuro incluye Dragon Ball clásico, Dragon Ball Z, Dragon Ball GT y Dragon Ball Super. Namek se trabajará cuando se encuentre un mapa adecuado en otro juego y se compruebe que puede adaptarse.
+## Recursos locales y Git
 
-============================================================
-FIN DEL DOCUMENTO
-============================================================
+Las ISO, el video, los ejecutables, las partidas, los mapas extraídos y los binarios generados permanecen locales y están excluidos mediante `.gitignore`. La carpeta `external/local-only/` contiene la instalación local y referencias de BT2; no se publica en GitHub. La imagen fuente del marcador y las herramientas sí forman parte del repositorio.
 
-
-
-
-
-
-
-
-
-
-
-
-## Dependencias locales excluidas de Git
-
-La ISO de Budokai Tenkaichi 2 y la copia de trabajo de BT2-Recomp se guardan localmente en `external/local-only/`. Esa carpeta está excluida por `.gitignore`: los archivos quedan disponibles en esta computadora, pero no se incluirán al subir el repositorio. El proyecto BT2-Recomp es una recompilación de código abierto; consulta su licencia dentro de esa carpeta y su repositorio de origen antes de redistribuir copias.
+Las posiciones y la evidencia de los marcadores se describen en [marcadores-saga-saiyajin-bt2.md](docs/research/marcadores-saga-saiyajin-bt2.md).
 
 
+### Cinemáticas locales de los encuentros
 
+Los vídeos se guardan en `external/local-only/DBZBT3R/cinematics/` y no se suben a GitHub. Se pueden saltar con Enter. Para cada encuentro, el archivo terminado en `-0.mp4` se reproduce antes de la pelea y el que tenga el número positivo más alto se reproduce después de ganar. Los números intermedios quedan reservados para futuros eventos dentro del combate; actualmente no se reproducen.
+
+- Piccolo: `RadditzvsPiccolo-0.mp4` y `RadditzvsPiccolo-1.mp4`.
+- Kame House: `GokuvsRadditz-0.mp4` y `GokuvsRadditz-1.mp4`.
+
+Si se pierde o abandona la pelea, no se reproduce la escena de victoria y se puede reintentar.
+
+Los encuentros de Piccolo y Kame House pueden repetirse desde sus marcadores con Enter/Start, sin borrar las victorias guardadas. El límite de tiempo es de 40 segundos para Piccolo y 90 segundos para Kame House. Tras agotar el tiempo, el juego nativo determina el resultado.

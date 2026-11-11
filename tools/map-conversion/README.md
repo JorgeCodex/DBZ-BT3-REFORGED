@@ -35,3 +35,10 @@ El archivo `raditz-marker.bin` debe estar junto al ejecutable del paquete local.
 ```powershell
 python tools/map-conversion/build_raditz_marker.py assets/ui/raditz-icon.png external/local-only/DBZBT3R/earth-adventure-map.unk external/local-only/DBZBT3R/raditz-marker.bin
 ```
+
+Para generar también los marcadores de la vista de prueba:
+
+```powershell
+python tools/map-conversion/build_raditz_marker.py assets/ui/piccolo-icon.png external/local-only/DBZBT3R/earth-adventure-map.unk external/local-only/DBZBT3R/piccolo-marker.bin
+python tools/map-conversion/build_raditz_marker.py assets/ui/goku-icon.png external/local-only/DBZBT3R/earth-adventure-map.unk external/local-only/DBZBT3R/goku-marker.bin
+```

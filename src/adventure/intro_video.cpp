@@ -5,10 +5,12 @@
 #include <atomic>
 #include <cstdio>
 #include <filesystem>
+#include <cwchar>
+#include <limits>
 
-extern "C" __declspec(dllexport) void PlayRaditzIntro();
+extern "C" __declspec(dllexport) int PlayRaditzIntro();
 #ifdef RADITZ_FLIGHT
-void RunRaditzAdventure();
+bool RunRaditzAdventure();
 #endif
 
 namespace {
@@ -84,8 +86,12 @@ private:
     std::atomic<ULONG> references{1};
 };
 
-void Play(const std::filesystem::path& folder, HWND parent) {
-    const auto clip = folder / L"saiyan-pod-landing.mp4";
+void Play(const std::filesystem::path& folder, HWND parent, const std::filesystem::path& clip) {
+    FILE* log = nullptr;
+    if (_wfopen_s(&log, (folder / L"intro-video.log").c_str(), L"a") == 0) {
+        std::fwprintf(log, L"Playing: %ls\n", clip.c_str());
+        std::fclose(log);
+    }
     RECT client{};
     GetClientRect(parent, &client);
     HWND overlay = CreateWindowExW(WS_EX_NOPARENTNOTIFY, L"STATIC", L"",
@@ -155,30 +161,68 @@ void Play(const std::filesystem::path& folder, HWND parent) {
     }
     events->Release();
     DestroyWindow(overlay);
-    if (skipped) Log(folder, "MP4 skipped with Enter, continuing to the Dragon Adventure map");
+    if (skipped) Log(folder, "MP4 skipped with Enter");
     else if (interrupted) Log(folder, "MP4 playback interrupted");
-    else if (FAILED(result)) Log(folder, "MP4 playback failed, continuing to the Dragon Adventure map", result);
-    else Log(folder, "MP4 playback ended, continuing to the Dragon Adventure map");
+    else if (FAILED(result)) Log(folder, "MP4 playback failed; continuing", result);
+    else Log(folder, "MP4 playback ended");
 }
-void PlayMissionVideo() {
+void PlayVideo(const std::filesystem::path& clip) {
     const HWND parent = GameWindow();
     if (!parent) return;
     const auto folder = ModuleFolder();
     if (folder.empty()) return;
-    Log(folder, "Raditz mission confirmed");
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(clip, error)) {
+        Log(folder, "Video file missing; continuing");
+        return;
+    }
     const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(com) && com != RPC_E_CHANGED_MODE) {
         Log(folder, "Could not initialize MP4 playback", com);
         return;
     }
-    Play(folder, parent);
+    Play(folder, parent, clip);
     if (SUCCEEDED(com)) CoUninitialize();
 }
 } // namespace
 
-extern "C" __declspec(dllexport) void PlayRaditzIntro() {
-    PlayMissionVideo();
+// Number 0 is the introduction; the highest positive number is the ending.
+// Intermediate numbers are reserved for future in-battle events.
+void PlayEncounterVideo(const wchar_t* prefix, bool ending) {
+    const auto folder = ModuleFolder();
+    if (folder.empty()) return;
+    const auto clips = folder / L"cinematics";
+    if (!ending) {
+        PlayVideo(clips / (std::wstring(prefix) + L"-0.mp4"));
+        return;
+    }
+    std::error_code error;
+    std::filesystem::directory_iterator it(clips, error), end;
+    unsigned long highest = 0;
+    std::filesystem::path chosen;
+    const std::wstring start = std::wstring(prefix) + L"-";
+    for (; !error && it != end; it.increment(error)) {
+        if (!it->is_regular_file(error) || error) continue;
+        const auto name = it->path().filename().wstring();
+        if (name.compare(0, start.size(), start) != 0 || it->path().extension() != L".mp4") continue;
+        const auto number = name.substr(start.size(), name.size() - start.size() - 4);
+        if (number.empty() || number.find_first_not_of(L"0123456789") != std::wstring::npos) continue;
+        wchar_t* stop = nullptr;
+        const unsigned long index = std::wcstoul(number.c_str(), &stop, 10);
+        if (*stop == L'\0' && index > highest && index != (std::numeric_limits<unsigned long>::max)()) {
+            highest = index;
+            chosen = it->path();
+        }
+    }
+    if (chosen.empty()) Log(folder, "Encounter ending video missing; continuing");
+    else PlayVideo(chosen);
+}
+
+extern "C" __declspec(dllexport) int PlayRaditzIntro() {
+    PlayVideo(ModuleFolder() / L"saiyan-pod-landing.mp4");
 #ifdef RADITZ_FLIGHT
-    RunRaditzAdventure();
+    return RunRaditzAdventure() ? 1 : 0;
+#else
+    return 1;
 #endif
 }

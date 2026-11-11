@@ -3,6 +3,7 @@
 
 namespace rva {
 constexpr std::uintptr_t Battle_GetWork = 0x6b20;
+constexpr std::uintptr_t Battle_Main = 0x2700;
 constexpr std::uintptr_t Battle_Load = 0x6c60;
 constexpr std::uintptr_t Battle_Loop = 0x25f0;
 constexpr std::uintptr_t Battle_Unload = 0x6cd0;

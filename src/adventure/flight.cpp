@@ -1,3 +1,4 @@
+void PlayEncounterVideo(const wchar_t* prefix, bool ending);
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <utility>
+#include <initializer_list>
 
 #include "bt3_runtime_addresses.h"
 #include "earth_collision.h"
@@ -57,24 +59,48 @@ void FlightLog(const char* message, int frames = 0, float value = 0) {
 }
 
 EarthCollision earthCollision;
-void* markerResource = nullptr;
+enum class Encounter { None, Piccolo, KameHouse, RaditzFinal };
+Encounter confirmedEncounter = Encounter::None;
+bool piccoloWon = false;
+bool kameHouseWon = false;
+bool resumeAtEncounter = false;
+Vec resumePosition;
+float resumeHeading = 0.0f;
+std::uint8_t encounterSetup[0x5A8]{};
+
+bool ProgressPath(wchar_t (&path)[MAX_PATH]) {
+    const DWORD n = GetFullPathNameW(L"saves\\dbzbt3r-progress.ini", MAX_PATH, path, nullptr);
+    return n > 0 && n < MAX_PATH;
+}
+
+bool LoadVictory(const wchar_t* key) {
+    wchar_t path[MAX_PATH];
+    return ProgressPath(path) && GetPrivateProfileIntW(L"story", key, 0, path) == 1;
+}
+
+bool SaveVictory(const wchar_t* key) {
+    if (!CreateDirectoryW(L"saves", nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+    wchar_t path[MAX_PATH];
+    return ProgressPath(path) && WritePrivateProfileStringW(L"story", key, L"1", path) != 0;
+}
+// BT2 story marker IDs: 14 = Piccolo/Raditz encounter, 9 = Kame House.
+constexpr int MarkerCount = 3;
+void* markerResources[MarkerCount]{};
 struct MarkerSprite {
     int flags, x0, y0, x1, y1, u0, v0, u1, v1, texture, r, g, b, a;
 };
 MarkerSprite* markerSprites = nullptr;
 
-bool LoadRaditzMarker() {
+bool LoadMarkerResource(int index, const char* path) {
     FILE* f = nullptr;
-    if (fopen_s(&f, "raditz-marker.bin", "rb")) return false;
+    if (fopen_s(&f, path, "rb")) return false;
     constexpr size_t entrySize = 64, packetSize = 16512, totalSize = 128 + packetSize;
     auto* data = Game<unsigned char*>(rva::Port_LowAlloc, totalSize);
-    auto* sprites = Game<MarkerSprite*>(rva::Port_LowAlloc, 2 * sizeof(MarkerSprite));
-    bool ok = data && sprites && std::fread(data + 64, 1, entrySize, f) == entrySize &&
+    bool ok = data && std::fread(data + 64, 1, entrySize, f) == entrySize &&
               std::fread(data + 128, 1, packetSize, f) == packetSize && std::fgetc(f) == EOF;
     std::fclose(f);
     if (!ok) {
         if (data) Game(rva::Port_LowFree, data);
-        if (sprites) Game(rva::Port_LowFree, sprites);
         return false;
     }
     std::memset(data, 0, 64);
@@ -84,15 +110,24 @@ bool LoadRaditzMarker() {
     Field<std::uint32_t>(data, 0x48) = static_cast<std::uint32_t>(packetSize);
     Field<std::uint32_t>(data, 0x78) = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(data + 128));
     Field<std::uint32_t>(data, 0x7c) = 0;
-    markerResource = data;
-    markerSprites = sprites;
+    markerResources[index] = data;
     return true;
 }
 
-void FreeRaditzMarker() {
-    if (markerResource) Game(rva::Port_LowFree, markerResource);
+void LoadMarkers() {
+    markerSprites = Game<MarkerSprite*>(rva::Port_LowAlloc, MarkerCount * 2 * sizeof(MarkerSprite));
+    const char* paths[MarkerCount] = {"piccolo-marker.bin", "goku-marker.bin", "raditz-marker.bin"};
+    for (int i = 0; i < MarkerCount; ++i) {
+        if (!LoadMarkerResource(i, paths[i])) FlightLog("Story marker resource unavailable", i);
+    }
+}
+
+void FreeMarkers() {
+    for (auto& resource : markerResources) {
+        if (resource) Game(rva::Port_LowFree, resource);
+        resource = nullptr;
+    }
     if (markerSprites) Game(rva::Port_LowFree, markerSprites);
-    markerResource = nullptr;
     markerSprites = nullptr;
 }
 float earthScale = 1.0f;
@@ -165,9 +200,10 @@ struct Pilot {
     bool fastFlight = false;
     bool dashReverseHeld = false;
     bool dashEffects = false;
-    float markerX = 0.0f;
-    float markerY = 0.0f;
-    bool markerVisible = false;
+    Vec markerGoals[MarkerCount];
+    float markerX[MarkerCount]{};
+    float markerY[MarkerCount]{};
+    bool markerVisible[MarkerCount]{};
     bool arrived = false;   // reached the destination and locked the flight controls
     int arriveFrames = 0;
 };
@@ -317,14 +353,17 @@ float Move(Pilot& pilot, void* pad) {
     if (pilot.arrived) return GroundY(pilot.position.x, pilot.position.z, pilot.floor);
 
     const auto pressed = Field<std::uint32_t>(pad, 0x18C);
-    if ((pressed & Start) && Distance(pilot.position, pilot.goal) < ArrivalRadius) {
+    const float piccoloDistance = Distance(pilot.position, pilot.markerGoals[0]);
+    const float raditzDistance = Distance(pilot.position, pilot.markerGoals[2]);
+    const float kameDistance = std::hypot(pilot.position.x - pilot.markerGoals[1].x, pilot.position.z - pilot.markerGoals[1].z);
+    if ((pressed & Start) && (raditzDistance < ArrivalRadius || piccoloDistance < ArrivalRadius || (piccoloWon && kameDistance < ArrivalRadius))) {
+        confirmedEncounter = raditzDistance < ArrivalRadius ? Encounter::RaditzFinal :
+                             piccoloDistance < ArrivalRadius ? Encounter::Piccolo : Encounter::KameHouse;
         pilot.arrived = true;
         pilot.boosting = false;
         pilot.fastFlight = false;
         pilot.velocity = {0, 0, 0, 0};
-        pilot.pitch = 0.0f;
-        pilot.bank = 0.0f;
-        pilot.verticalInput = 0.0f;
+        pilot.pitch = pilot.bank = pilot.verticalInput = 0.0f;
         return GroundY(pilot.position.x, pilot.position.z, pilot.floor);
     }
 
@@ -486,13 +525,15 @@ void UpdateDashEffects(Pilot& pilot, void* fighter) {
 
 void DrawMarker(Pilot& pilot, char* label) {
     constexpr std::size_t labelSize = 112;
-    char* marker = label + labelSize;
-    std::memcpy(marker, "[ C ]", 6);
-    const float remaining = Distance(pilot.position, pilot.goal);
-    const char* controls = remaining < ArrivalRadius && !pilot.arrived
-        ? "ENTER / START PARA ENTRAR"
-        : "O SUBE   9 BAJA   L2 TURBO";
-    std::snprintf(label, labelSize, "RADITZ: %d m   %s", static_cast<int>(remaining), controls);
+    const float proximity = Distance(pilot.position, pilot.markerGoals[0]);
+    const float raditzDistance = Distance(pilot.position, pilot.markerGoals[2]);
+    const float kameDistance = std::hypot(pilot.position.x - pilot.markerGoals[1].x, pilot.position.z - pilot.markerGoals[1].z);
+    if (raditzDistance < ArrivalRadius) std::snprintf(label, labelSize, "RADITZ: ENTER / START PARA PELEAR");
+    else if (proximity < ArrivalRadius) std::snprintf(label, labelSize, piccoloWon ? "PICCOLO: ENTER / START PARA REPETIR" : "PICCOLO: ENTER / START PARA PELEAR");
+    else if (piccoloWon && kameDistance < ArrivalRadius) std::snprintf(label, labelSize, kameHouseWon ? "KAME HOUSE: ENTER / START PARA REPETIR" : "KAME HOUSE: ENTER / START PARA PELEAR");
+    else if (kameHouseWon) std::snprintf(label, labelSize, "KAME HOUSE COMPLETADO   PICCOLO: %d m   L2 TURBO", static_cast<int>(proximity));
+    else if (piccoloWon) std::snprintf(label, labelSize, "PICCOLO COMPLETADO   GOKU: %d m   L2 TURBO", static_cast<int>(kameDistance));
+    else std::snprintf(label, labelSize, "PICCOLO: %d m   GOKU: %d m   L2 TURBO", static_cast<int>(proximity), static_cast<int>(Distance(pilot.position, pilot.markerGoals[1])));
     const auto color = Game<std::uint32_t>(rva::Font_GetColor);
     const auto scale = Game<std::uint32_t>(rva::Font_GetScale);
     const int enabled = Game<int>(rva::Font_IsEnabled);
@@ -503,44 +544,35 @@ void DrawMarker(Pilot& pilot, char* label) {
 
     alignas(16) float screen[4][4];
     Game(rva::Vu0Screen_StoreMtx, &screen[0][0]);
-    const Vec goal{pilot.goal.x, pilot.goal.y - 14.0f, pilot.goal.z};
-    const auto dot = [&](int col) {
-        return goal.x * screen[0][col] + goal.y * screen[1][col] + goal.z * screen[2][col] + screen[3][col];
-    };
-    const float depth = dot(3);
-    const bool inFront = std::isfinite(depth) && depth > 1.0f;
-    if (inFront) {
+    const char* names[MarkerCount] = {"P", "G", "R"};
+    for (int i = 0; i < MarkerCount; ++i) {
+        const Vec& goal = pilot.markerGoals[i];
+        const auto dot = [&](int col) {
+            return goal.x * screen[0][col] + goal.y * screen[1][col] + goal.z * screen[2][col] + screen[3][col];
+        };
+        const float depth = dot(3);
+        if (!std::isfinite(depth) || depth <= 1.0f) { pilot.markerVisible[i] = false; continue; }
         const float targetX = dot(0) / depth - 1792.0f;
         const float targetY = dot(1) / depth - 1824.0f;
-        if (std::isfinite(targetX) && std::isfinite(targetY)) {
-            const float clampedX = std::clamp(targetX, 24.0f, 488.0f);
-            const float clampedY = std::clamp(targetY, 52.0f, 410.0f);
-            if (!pilot.markerVisible) {
-                pilot.markerX = clampedX;
-                pilot.markerY = clampedY;
-                pilot.markerVisible = true;
-            } else {
-                // Smooth the projection without changing the destination's world position.
-                pilot.markerX += (clampedX - pilot.markerX) * 0.22f;
-                pilot.markerY += (clampedY - pilot.markerY) * 0.22f;
-            }
-            const int x = static_cast<int>(std::lround(pilot.markerX));
-            const int y = static_cast<int>(std::lround(pilot.markerY));
-            if (markerResource && markerSprites) {
-                markerSprites[0] = {1, x - 24, y - 46, x + 24, y + 2, 0, 0, 64, 64, 0, 128, 128, 128, 128};
-                markerSprites[1] = {};
-                markerSprites[1].flags = 2;
-                Game(rva::Sprite_DrawList, markerResource, 0, 0, markerSprites);
-            } else {
-                Game(rva::Font_SetColor, 0x8000E8FFu);
-                Game(rva::Font_PrintAsciiAt, x - 18, y, marker);
-            }
+        if (!std::isfinite(targetX) || !std::isfinite(targetY)) { pilot.markerVisible[i] = false; continue; }
+        // Piccolo and Raditz both use marker 14 in BT2; offsets only separate their icons.
+        const float offset = i == 0 ? -25.0f : i == 2 ? 25.0f : 0.0f;
+        const float x = std::clamp(targetX + offset, 24.0f, 488.0f);
+        const float y = std::clamp(targetY, 52.0f, 410.0f);
+        if (!pilot.markerVisible[i]) { pilot.markerX[i] = x; pilot.markerY[i] = y; pilot.markerVisible[i] = true; }
+        else { pilot.markerX[i] += (x - pilot.markerX[i]) * 0.22f; pilot.markerY[i] += (y - pilot.markerY[i]) * 0.22f; }
+        const int sx = static_cast<int>(std::lround(pilot.markerX[i]));
+        const int sy = static_cast<int>(std::lround(pilot.markerY[i]));
+        if (markerResources[i] && markerSprites) {
+            auto* sprites = markerSprites + i * 2;
+            sprites[0] = {1, sx - 24, sy - 46, sx + 24, sy + 2, 0, 0, 64, 64, 0, 128, 128, 128, 128};
+            sprites[1] = {}; sprites[1].flags = 2;
+            Game(rva::Sprite_DrawList, markerResources[i], 0, 0, sprites);
         } else {
-            pilot.markerVisible = false;
+            char* fallback = label + labelSize;
+            std::snprintf(fallback, 16, "[%s]", names[i]);
+            Game(rva::Font_PrintAsciiAt, sx - 8, sy, fallback);
         }
-    } else {
-        // Do not pretend a destination behind the camera is on the left or right.
-        pilot.markerVisible = false;
     }
     Game(rva::Font_FlushAll);
     Game(rva::Font_SetEnabled, enabled);
@@ -570,13 +602,13 @@ void Draw(Pilot& pilot, char* overlayText) {
     Game(rva::Gfx_MarkPass, 0);
 }
 
-bool AdventureCycle() {
+bool AdventureCycle(bool singleActor) {
     if (!Game<int>(rva::BtlStage_IsReady)) return false;
     auto* fighter = Game<void*>(rva::BtlChar_Get, 0);
     if (!fighter) return false;
     auto* avatar = Game<void*>(rva::BtlChar_GetObj, fighter);
     if (!avatar) return false;
-    auto* opponent = Game<void*>(rva::BtlChar_Get, 1);
+    auto* opponent = singleActor ? nullptr : Game<void*>(rva::BtlChar_Get, 1);
     auto* rival = opponent ? Game<void*>(rva::BtlChar_GetObj, opponent) : nullptr;
 
     Pilot pilot;
@@ -588,7 +620,16 @@ bool AdventureCycle() {
     // Coordenadas propias del mapa de aventura: punto de aparición y destino.
     // Crater identified from the BT2 Earth map; coordinates use original BT2 scale.
     pilot.position = { 1452.0f * earthScale, 0.0f, 650.0f * earthScale };
-    pilot.goal = { 300.0f * earthScale, 0.0f, 300.0f * earthScale };
+    pilot.goal = { 806.0f * earthScale, 0.0f, 278.0f * earthScale };
+    pilot.markerGoals[0] = pilot.goal;
+    pilot.markerGoals[1] = { 1452.0f * earthScale, 0.0f, -1218.0f * earthScale };
+    pilot.markerGoals[2] = pilot.goal;
+    for (auto& marker : pilot.markerGoals) {
+        marker.y = std::max(pilot.ceiling, GroundY(marker.x, marker.z, pilot.floor) - 45.0f);
+    }
+    // The final Raditz encounter is above Piccolo at the same horizontal location.
+    // The engine's Y axis points down, so a smaller value means higher altitude.
+    pilot.markerGoals[2].y = std::max(pilot.ceiling, pilot.markerGoals[0].y - 180.0f);
     float highestGround = 0.0f;
     for (int sample = 0; sample <= 16; ++sample) {
         const float fraction = sample / 16.0f;
@@ -599,9 +640,11 @@ bool AdventureCycle() {
     // Keep the prototype route and its marker above the ground during level flight.
     pilot.goal.y = std::max(pilot.ceiling, highestGround - 90.0f);
     pilot.position.y = std::max(pilot.ceiling, GroundY(pilot.position.x, pilot.position.z, pilot.floor) - 30.0f);
+    if (resumeAtEncounter) pilot.position = resumePosition;
+    else if (kameHouseWon) pilot.position = pilot.markerGoals[1];
     const float headingToGoal = std::atan2(pilot.goal.x - pilot.position.x, pilot.goal.z - pilot.position.z);
     if (!std::isfinite(headingToGoal)) return false;
-    pilot.heading = pilot.modelYaw = headingToGoal;
+    pilot.heading = pilot.modelYaw = resumeAtEncounter ? resumeHeading : headingToGoal;
 
     auto* overlayText = Game<char*>(rva::Port_LowAlloc, std::size_t{128});
     if (!overlayText) return false;
@@ -665,25 +708,89 @@ bool AdventureCycle() {
         }
     }
 
+    if (pilot.arrived) { resumePosition = pilot.position; resumeHeading = pilot.heading; resumeAtEncounter = true; }
     Game(rva::Port_LowFree, overlayText);
     FlightLog("Adventure cycle ended");
     return pilot.arrived;
 }
 } // namespace
 
-void RunRaditzAdventure() {
-    if (!LoadRaditzMarker()) FlightLog("Raditz marker unavailable; using C");
+// Temporary changes are applied only around the original loader/unloader and
+// restored in reverse order, including on a failed signature check.
+class AdventurePatchScope {
+    struct Entry { unsigned char* address; unsigned char original[5]; std::size_t size; DWORD protection; };
+    Entry entries[6]{};
+    int count = 0;
+public:
+    bool apply(std::uintptr_t rva, std::initializer_list<unsigned char> expected,
+               std::initializer_list<unsigned char> replacement) {
+        if (count == 6 || expected.size() != replacement.size() || expected.size() > 5) return false;
+        auto* address = reinterpret_cast<unsigned char*>(ImageBase() + rva);
+        if (std::memcmp(address, expected.begin(), expected.size()) != 0) return false;
+        DWORD protection = 0;
+        if (!VirtualProtect(address, expected.size(), PAGE_EXECUTE_READWRITE, &protection)) return false;
+        auto& entry = entries[count++];
+        entry.address = address; entry.size = expected.size(); entry.protection = protection;
+        std::memcpy(entry.original, address, entry.size);
+        std::memcpy(address, replacement.begin(), entry.size);
+        FlushInstructionCache(GetCurrentProcess(), address, entry.size);
+        return true;
+    }
+    void restore() {
+        while (count) {
+            auto& entry = entries[--count];
+            std::memcpy(entry.address, entry.original, entry.size);
+            FlushInstructionCache(GetCurrentProcess(), entry.address, entry.size);
+            DWORD ignored = 0;
+            VirtualProtect(entry.address, entry.size, entry.protection, &ignored);
+        }
+    }
+    ~AdventurePatchScope() { restore(); }
+};
+
+// The native unloader assumes ten member buffers on each side. Skip just the
+// unused side; if patching is unavailable, allocate temporary placeholders so
+// the unmodified unloader can safely free them instead of freeing null pointers.
+static void UnloadAdventure(void* work, bool skippedBuffers, int unusedSide) {
+    AdventurePatchScope patch;
+    bool skippedCleanup = false;
+    if (skippedBuffers) {
+        if (unusedSide == 0)
+            skippedCleanup = patch.apply(0x455D, {0xE8,0xCE,0x26,0x00,0x00}, {0xE9,0xE1,0x00,0x00,0x00});
+        else
+            skippedCleanup = patch.apply(0x4643, {0xE8,0xE8,0x25,0x00,0x00}, {0xE9,0xE1,0x00,0x00,0x00});
+        if (!skippedCleanup) {
+            constexpr std::uintptr_t Heap_Alloc = 0x430310;
+            auto* side = static_cast<std::uint8_t*>(work) + 0xC0 + unusedSide * 0x270;
+            for (int i = 0; i < 5; ++i) {
+                for (int n = 0; n < 2; ++n) {
+                    const auto buffer = Game<std::uint32_t>(Heap_Alloc, 0x1000, 0x40, 0, 2);
+                    if (!buffer) { FlightLog("Adventure cleanup could not allocate fallback buffers"); return; }
+                    Field<std::uint32_t>(side, 0x60 + i * 0x64 + n * 4) = buffer;
+                }
+            }
+            FlightLog("Adventure cleanup used temporary fallback buffers");
+        }
+    }
+    Game<int>(rva::Battle_Unload);
+    if (skippedCleanup) FlightLog("Adventure skipped unused-side buffer cleanup");
+}
+
+#include "adventure_loader.h"
+
+static bool RunAdventureOnce() {
+    LoadMarkers();
     if (!earthCollision.load("earth-collision.bin")) {
         FlightLog("Earth collision data unavailable");
-        FreeRaditzMarker();
-        return;
+        FreeMarkers();
+        return false;
     }
     FlightLog("Earth collision data loaded", static_cast<int>(earthCollision.triangles.size()));
     void* stage = LoadEarthStage();
     if (!stage) {
         FlightLog("BT2 Earth stage unavailable");
-        FreeRaditzMarker();
-        return;
+        FreeMarkers();
+        return false;
     }
 
     // The mission setup is already selected. Preserve it across this temporary load.
@@ -693,7 +800,51 @@ void RunRaditzAdventure() {
     Field<std::uint64_t>(work, 0x19F0) = 0;
 
     FlightLog("Adventure loading before Battle_Init", 0, earthScale);
-    Game<int>(rva::Battle_Load);
+    // v0.1.39.6 Battle_Load creates two fighter objects after loading. Run its
+    // resource setup separately, retaining the native story script and loader,
+    // then create only the actor selected below. Keep the original load path
+    // for an executable whose expected code is not present.
+    constexpr unsigned char loadSignature[] = {0x48, 0x83, 0xEC, 0x28, 0xB9, 0x01, 0x00, 0x00, 0x00, 0xE8, 0xA2, 0x2E, 0x06, 0x00};
+    const bool ownActorLoad = std::memcmp(reinterpret_cast<const void*>(ImageBase() + rva::Battle_Load),
+                                          loadSignature, sizeof(loadSignature)) == 0;
+    bool skippedOtherModel = false;
+    bool skippedOtherBuffers = false;
+    bool ownResourceJob = false;
+    int unusedBufferSide = kameHouseWon ? 1 : 0;
+    if (ownActorLoad) {
+        constexpr std::uintptr_t BtlObj_Init = 0x69B10;
+        constexpr std::uintptr_t Gsc_InitDefault = 0x42E350;
+        constexpr std::uintptr_t gBtlScriptCommands = 0x64A7A0;
+        constexpr std::uintptr_t BtlScript_Init = 0x6DEC0;
+        constexpr std::uintptr_t BtlLoad_PushInitialJob = 0x43F0;
+        constexpr std::uintptr_t Load_RunBlocking = 0x4335D0;
+        Game(BtlObj_Init, 1);
+        const auto commands = *reinterpret_cast<std::uintptr_t*>(ImageBase() + gBtlScriptCommands);
+        Game(Gsc_InitDefault, reinterpret_cast<void*>(commands));
+        Game(BtlScript_Init);
+        ownResourceJob = adventure_loader::Install(kameHouseWon);
+        if (!ownResourceJob) {
+            FlightLog("Adventure own job unavailable; using native resource job");
+            Game(BtlLoad_PushInitialJob);
+        }
+        Game(Load_RunBlocking);
+        if (ownResourceJob) {
+            adventure_loader::Finish();
+            if (!adventure_loader::Succeeded()) {
+                FlightLog("Adventure own resource job failed");
+                adventure_loader::Unload(work, unusedBufferSide);
+                Game(rva::Port_LowFree, stage);
+                std::memcpy(work, savedWork, sizeof(savedWork)); FreeMarkers();
+                return false;
+            }
+            skippedOtherModel = true; skippedOtherBuffers = true;
+        }
+        FlightLog("Adventure resources loaded without battle fighter objects");
+    } else {
+        FlightLog("Adventure custom loader unavailable; using native loader");
+        Game<int>(rva::Battle_Load);
+    }
+    std::memcpy(encounterSetup, work, sizeof(encounterSetup));
     // Swap temporary sides after the story script has populated and loaded them.
     // Keep the player's input assignment; the complete setup is restored on exit.
     auto* side0 = static_cast<std::uint8_t*>(work) + 0xC0;
@@ -701,21 +852,25 @@ void RunRaditzAdventure() {
     constexpr int RaditzCharacter = 77;
     if (Field<int>(side1, 4) != RaditzCharacter) {
         FlightLog("Raditz not found in mission setup; adventure cancelled");
-        Game<int>(rva::Battle_Unload);
+        if (ownResourceJob) adventure_loader::Unload(work, unusedBufferSide);
+        else UnloadAdventure(work, skippedOtherBuffers, unusedBufferSide);
         Game(rva::Port_LowFree, stage);
         std::memcpy(work, savedWork, sizeof(savedWork));
-        FreeRaditzMarker();
-        return;
+        FreeMarkers();
+        return false;
     }
     std::uint8_t tempSide[0x270];
     const int playerPad = Field<int>(side0, 0x204);
     const int playerControl = Field<int>(side0, 0x208);
-    std::memcpy(tempSide, side0, sizeof(tempSide));
-    std::memcpy(side0, side1, sizeof(tempSide));
-    std::memcpy(side1, tempSide, sizeof(tempSide));
+    if (!kameHouseWon) {
+        std::memcpy(tempSide, side0, sizeof(tempSide));
+        std::memcpy(side0, side1, sizeof(tempSide));
+        std::memcpy(side1, tempSide, sizeof(tempSide));
+        unusedBufferSide = 1 - unusedBufferSide;
+    }
     Field<int>(side0, 0x204) = playerPad;
     Field<int>(side0, 0x208) = playerControl;
-    FlightLog("Raditz selected for Adventure", RaditzCharacter);
+    FlightLog(kameHouseWon ? "Goku selected for Adventure" : "Raditz selected for Adventure", Field<int>(side0, 4));
     const auto arena = std::exchange(StageResource(),
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(stage)));
 
@@ -723,15 +878,62 @@ void RunRaditzAdventure() {
     // the story script, sequence, and AI after this hook returns.
     Game(rva::StgFx_Init);
     Game(rva::StgModel_InitStage);
-    Game(rva::BtlChar_AllocAll, 2);
+
+    // BT3 v0.1.39.6 hardcodes two characters in BtlScene_Init. Temporarily
+    // initialize its effects for one actor; restore the instruction before
+    // entering any real battle. Fall back safely on an unrecognized build.
+    auto* countInstruction = reinterpret_cast<unsigned char*>(ImageBase() + 0x6CA8C);
+    constexpr unsigned char expectedCount[] = {0xC7, 0x00, 0x02, 0x00, 0x00, 0x00};
+    DWORD oldProtection = 0;
+    bool singleActor = std::memcmp(countInstruction, expectedCount, sizeof(expectedCount)) == 0 &&
+                       VirtualProtect(countInstruction, sizeof(expectedCount), PAGE_EXECUTE_READWRITE, &oldProtection);
+    if (singleActor && !ownActorLoad) {
+        constexpr std::uintptr_t BtlObj_Destroy = 0x69130;
+        if (Game<int>(BtlObj_Destroy, Field<int>(side1, 0x268)) == 0) {
+            singleActor = false;
+            DWORD ignored = 0;
+            VirtualProtect(countInstruction, sizeof(expectedCount), oldProtection, &ignored);
+            FlightLog("Adventure could not release opponent; using compatibility mode");
+        }
+    }
+    if (singleActor) {
+        countInstruction[2] = 1;
+        FlushInstructionCache(GetCurrentProcess(), countInstruction, sizeof(expectedCount));
+    } else FlightLog("Adventure single-actor setup unavailable; using compatibility mode");
+
+    if (ownActorLoad && skippedOtherModel && !singleActor) {
+        FlightLog("Adventure cannot initialize one actor safely; stopping exploration");
+        Game(rva::StgFx_Term);
+        Game(rva::BtlStage_Term);
+        StageResource() = arena;
+        Game(rva::Port_LowFree, stage);
+        if (ownResourceJob) adventure_loader::Unload(work, unusedBufferSide);
+        else UnloadAdventure(work, skippedOtherBuffers, unusedBufferSide);
+        std::memcpy(work, savedWork, sizeof(savedWork));
+        FreeMarkers();
+        return false;
+    }
+    if (ownActorLoad) {
+        constexpr std::uintptr_t BtlObj_CreateChara = 0x691C0;
+        Field<int>(side0, 0x268) = Game<int>(BtlObj_CreateChara, Field<int>(side0, 0x26C));
+        if (!singleActor) Field<int>(side1, 0x268) = Game<int>(BtlObj_CreateChara, Field<int>(side1, 0x26C));
+        FlightLog(singleActor ? "Adventure created only its playable actor" : "Adventure created two compatibility actors");
+    }
+    Game(rva::BtlChar_AllocAll, singleActor ? 1 : 2);
     Game(rva::BtlCam_Init);
     Game(rva::Ot_Init);
     Game(rva::BtlScene_Init, 0);
+    if (singleActor) {
+        countInstruction[2] = 2;
+        FlushInstructionCache(GetCurrentProcess(), countInstruction, sizeof(expectedCount));
+        DWORD ignored = 0;
+        VirtualProtect(countInstruction, sizeof(expectedCount), oldProtection, &ignored);
+    }
     Game(rva::StgFx_Reset);
     Game(rva::Fade_ResetAll);
 
-    const bool arrived = AdventureCycle();
-    FreeRaditzMarker();
+    const bool arrived = AdventureCycle(singleActor);
+    FreeMarkers();
 
     Game(rva::BtlChar_FreeAll);
     Game(rva::BtlCam_Term);
@@ -741,10 +943,112 @@ void RunRaditzAdventure() {
     Game(rva::BtlStage_Term);
     StageResource() = arena; // Battle_Unload owns the arena buffer, not our map.
     Game(rva::Port_LowFree, stage);
-    Game<int>(rva::Battle_Unload);
+    if (ownResourceJob) adventure_loader::Unload(work, unusedBufferSide);
+    else UnloadAdventure(work, skippedOtherBuffers, unusedBufferSide);
     Game(rva::Fade_ResetAll);
     std::memcpy(work, savedWork, sizeof(savedWork));
-    FlightLog(arrived ? "Adventure confirmed, ready for Battle_Init" : "Adventure ended before confirmation");
+    FlightLog(arrived ? (confirmedEncounter == Encounter::Piccolo ? "Adventure confirmed Piccolo encounter" : confirmedEncounter == Encounter::RaditzFinal ? "Adventure confirmed final Raditz encounter" : "Adventure confirmed Kame House encounter") : "Adventure ended before confirmation");
+    return arrived;
+}
+
+bool RunRaditzAdventure() {
+    piccoloWon = LoadVictory(L"piccolo_victory");
+    kameHouseWon = piccoloWon && LoadVictory(L"kame_house_victory");
+    confirmedEncounter = Encounter::None;
+    resumeAtEncounter = false;
+    auto* work = Game<void*>(rva::Battle_GetWork);
+    std::uint8_t original[0x1A00];
+    std::memcpy(original, work, sizeof(original));
+    bool startNativeBattle = false;
+    while (RunAdventureOnce()) {
+        if (confirmedEncounter == Encounter::RaditzFinal) {
+            startNativeBattle = true;
+            FlightLog("Adventure yielding to native Raditz story battle");
+            break;
+        }
+        // Start a separate 1P-versus-CPU match with Piccolo (Early) and Raditz.
+        std::memset(work, 0, sizeof(original));
+        std::memcpy(work, encounterSetup, sizeof(encounterSetup));
+        Field<int>(work, 0xBC) = 0;  // no story script replaces this setup
+        Field<int>(work, 0x08) = 2;  // 1P battle mode: exits after the result without a versus menu
+        Field<int>(work, 0x24) = 0;  // single screen
+        auto* side0 = static_cast<std::uint8_t*>(work) + 0xC0;
+        auto* side1 = side0 + 0x270;
+        constexpr int PiccoloEarly = 0x16;
+        if (confirmedEncounter == Encounter::KameHouse) {
+            // Preserve the original mission character, costume and form on both sides.
+            std::uint8_t tempSide[0x270];
+            const int playerPad = Field<int>(side0, 0x204);
+            std::memcpy(tempSide, side0, sizeof(tempSide));
+            std::memcpy(side0, side1, sizeof(tempSide));
+            std::memcpy(side1, tempSide, sizeof(tempSide));
+            Field<int>(side0, 0) = Field<int>(side1, 0) = 1;
+            Field<int>(side0, 0x1F8) = Field<int>(side1, 0x1F8) = 0;
+            Field<int>(side0, 0x204) = playerPad;
+            Field<int>(side0, 0x208) = 0;
+            Field<int>(side1, 0x208) = 2;
+            constexpr int KameHouseStage = 12;
+            Field<int>(work, 0x1C) = KameHouseStage;
+            Field<int>(work, 0x28) = KameHouseStage;
+            FlightLog("Kame House Raditz vs Goku battle starting", Field<int>(side1, 4), static_cast<float>(Field<int>(side1, 8)));
+        } else {
+        Field<int>(side0, 0) = 1;
+        Field<int>(side0, 4) = PiccoloEarly;
+        Field<int>(side0, 8) = 0;
+        Field<int>(side0, 12) = 0;
+        Field<int>(side0, 0x1F8) = 0;
+        Field<int>(side0, 0x208) = 0;
+        Field<int>(side0, 0x250) = PiccoloEarly;
+        Field<int>(side0, 0x254) = 0;
+        Field<int>(side0, 0x258) = 0;
+        Field<int>(side0, 0x25C) = PiccoloEarly;
+        Field<int>(side0, 0x260) = 0;
+        Field<int>(side0, 0x264) = 0;
+        Field<int>(side1, 0x208) = 2;
+        FlightLog("Piccolo vs Raditz battle starting", PiccoloEarly);
+        }
+        const wchar_t* videoPrefix = confirmedEncounter == Encounter::KameHouse ? L"GokuvsRadditz" : L"RadditzvsPiccolo";
+
+        PlayEncounterVideo(videoPrefix, false);
+        // v0.1.39.6: the native clock uses this table of preset seconds.
+        // Temporarily replace the 45-second preset with 40 and restore it afterwards.
+        auto* timeLimits = reinterpret_cast<std::int16_t*>(ImageBase() + 0x4765C0);
+        const bool knownTimeTable = timeLimits[0] == -1 && timeLimits[1] == 60 &&
+                                    timeLimits[2] == 90 && timeLimits[3] == 180 &&
+                                    timeLimits[4] == 240 && timeLimits[5] == 45;
+        if (confirmedEncounter == Encounter::KameHouse) {
+            Field<int>(work, 0x10) = 2; // native 90-second preset
+        } else if (knownTimeTable) {
+            timeLimits[5] = 40;
+            Field<int>(work, 0x10) = 5;
+        } else {
+            Field<int>(work, 0x10) = 5;
+            FlightLog("Unexpected time-limit table; using native 45-second preset");
+        }
+        Game<int>(rva::Battle_Main);
+        if (confirmedEncounter == Encounter::Piccolo && knownTimeTable) timeLimits[5] = 45;
+        const auto winner = Field<std::uint32_t>(work, 0x1938);
+        const auto reason = Field<std::uint32_t>(work, 0x193C);
+        FlightLog(confirmedEncounter == Encounter::KameHouse ? "Kame House battle result" : "Piccolo battle result", static_cast<int>(winner), static_cast<float>(reason));
+        if ((winner & 0xFu) == 1u && !(reason & 0x18000u)) {
+            PlayEncounterVideo(videoPrefix, true);
+
+            if (confirmedEncounter == Encounter::KameHouse) {
+                kameHouseWon = true;
+                if (!SaveVictory(L"kame_house_victory")) FlightLog("Unable to save Kame House victory");
+                else FlightLog("Kame House victory saved");
+            } else {
+                piccoloWon = true;
+                if (!SaveVictory(L"piccolo_victory")) FlightLog("Unable to save Piccolo victory");
+                else FlightLog("Piccolo victory saved");
+            }
+        }
+        confirmedEncounter = Encounter::None;
+        std::memcpy(work, original, sizeof(original));
+    }
+    std::memcpy(work, original, sizeof(original));
+    FlightLog(startNativeBattle ? "Adventure dispatcher requested native battle" : "Adventure dispatcher returned to menu");
+    return startNativeBattle;
 }
 
 // Compatibility with the existing executable's two battle call-site hooks.
