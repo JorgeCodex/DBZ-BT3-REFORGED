@@ -25,9 +25,15 @@ void FlightLog(const char *message, int frames = 0, float value = 0) {
         std::fclose(file);
     }
 }
-// Experimental loader: exactly one actor; the original story script is resolved first.
+// Adventure loader: one controllable actor and, after Kame House, a companion.
 static int adventureNativeSide = 0;
 static bool adventureLoadSucceeded = false;
+static bool storyPiccoloWon = false;
+static int targetSlot = -1;
+static int replayPiccoloSlot = -1;
+static int replayGokuSlot = -1;
+static int companionSlot = -1;
+static std::uint32_t companionParam = 0;
 static DWORD adventureThunkProtection = 0;
 static void *adventureJobThunk = nullptr;
 static int AdventureInitialJob(void *job) {
@@ -111,6 +117,28 @@ static int AdventureInitialJob(void *job) {
             return 1;
         }
         Field<int>(side, 0x26C) = model;
+        {
+            const int npc = adventureNativeSide == 0 || !storyPiccoloWon ? 0x16 : 0;
+            const int costume = npc == 0x16 ? 1 : Field<int>(static_cast<std::uint8_t*>(work) + 0xC0, 0x254);
+            companionSlot = Game<int>(0x69690, 1, npc, costume, 0);
+            companionParam = alloc(0x1000);
+            if (companionSlot < 0 || !companionParam) { FlightLog("Companion request failed"); return 1; }
+            zero(companionParam, 0x1000);
+            const auto requested = request(npc * 2 + 1 + 8, companionParam, 0x1000);
+            if (!requested) { FlightLog("Companion params failed"); return 1; }
+            companionParam = requested;
+            if (adventureNativeSide == 0) {
+                targetSlot = Game<int>(0x696d0, 0, 77 * 10 + 0x590, 77 * 10 + 0x598, 77 * 10 + 0x599);
+                if (targetSlot < 0) { FlightLog("Target request failed"); return 1; }
+                FlightLog("Target resource requested", targetSlot);
+            }
+            if (storyPiccoloWon) {
+                replayPiccoloSlot = adventureNativeSide == 0 ? companionSlot : Game<int>(0x696d0, 0, 0x16 * 10 + 0x590 + 1, 0x16 * 10 + 0x598, 0x16 * 10 + 0x599);
+                if (replayPiccoloSlot < 0) { FlightLog("Replay Piccolo request failed"); return 1; }
+            }
+            if (adventureNativeSide == 0) replayGokuSlot = model;
+            FlightLog("Companion resource requested", companionSlot);
+        }
         int stageSize = Game<int>(0x3F8530);
         Field<int>(res, 0x2C) = stageSize;
         std::uint32_t stageBuffer = stageSize > 0x6CB800 ? Game<std::uint32_t>(0x3F25E0, stageSize) : 0;
@@ -175,6 +203,14 @@ static int AdventureInitialJob(void *job) {
     case 5:
         if (!Game<int>(0x4169C0))
             return 0;
+        if (companionParam) {
+            // A low-address holder is required by the 32-bit translated resource routines.
+            auto holder = Game<std::uint32_t>(0x430310, 0x40, 0x40, 0, 2);
+            if (!holder) { FlightLog("Companion relocation allocation failed"); return 1; }
+            auto* ptr = reinterpret_cast<std::uint32_t*>(static_cast<std::uintptr_t>(holder));
+            *ptr = companionParam; Game(0x420A20, ptr, companionParam, companionParam);
+            companionParam = *ptr; Game(0x430340, holder);
+        }
         for (int i = 0; i < Field<int>(side, 0); i++) {
             auto *ptr = side + 0x60 + i * 0x64;
             auto buf = Field<std::uint32_t>(side, 0x60 + i * 0x64);
@@ -192,7 +228,8 @@ static int AdventureInitialJob(void *job) {
         return 1;
     }
 }
-static bool InstallAdventureJob(bool goku) {
+static bool InstallAdventureJob(bool goku, bool won) {
+    storyPiccoloWon = won;
     adventureJobThunk = Game<void *>(rva::Port_LowAlloc, std::size_t{64});
     if (!adventureJobThunk)
         return false;
@@ -236,6 +273,8 @@ static bool InstallAdventureJob(bool goku) {
 }
 static void OwnAdventureUnload(void *work, int unusedSide) {
     Game(0x69F40); // BtlObj_Term
+    if (companionParam) Game(0x430340, companionParam);
+    companionParam = 0; companionSlot = -1; targetSlot = -1; replayPiccoloSlot = -1; replayGokuSlot = -1;
     auto *res = reinterpret_cast<void *>(
         static_cast<std::uintptr_t>(*reinterpret_cast<std::uint32_t *>(ImageBase() + rva::gCommonRes)) + 0x20);
     if (Field<int>(work, 8) == 1) {
@@ -280,7 +319,12 @@ static void FinishAdventureJob() {
 
 } // namespace
 namespace adventure_loader {
-bool Install(bool goku) { return InstallAdventureJob(goku); }
+int TargetSlot() { return targetSlot; }
+int ReplayPiccoloSlot() { return replayPiccoloSlot; }
+int ReplayGokuSlot() { return replayGokuSlot; }
+int CompanionSlot() { return companionSlot; }
+std::uint32_t CompanionParam() { return companionParam; }
+bool Install(bool goku, bool won) { return InstallAdventureJob(goku, won); }
 bool Succeeded() { return adventureLoadSucceeded; }
 void Finish() { FinishAdventureJob(); }
 void Unload(void *work, int unusedSide) { OwnAdventureUnload(work, unusedSide); }

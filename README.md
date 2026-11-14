@@ -10,107 +10,56 @@ Actualizado: 11 de noviembre de 2026.
 
 El prototipo de la misión de Raditz sigue esta secuencia:
 
-**Confirmar la misión → cinemática de llegada → explorar como Raditz → combate de Piccolo contra Raditz → regresar como Raditz → combate de Raditz contra Goku en Kame House → regresar como Goku → encuentro final y pelea nativa de BT3.**
+**Confirmar la misión → explorar como Raditz → combate de Piccolo contra Raditz → regresar como Raditz → combate de Raditz contra Goku en Kame House → regresar como Goku → encuentro final y pelea nativa de BT3.**
 
-La exploración usa el mapa de Dragon Adventure de BT2, convertido a BT3 y escalado al doble de su tamaño original. Raditz aparece sobre el cráter de su cápsula, en la zona identificada en el mapa. La vista actual muestra simultáneamente los iconos de Piccolo, Goku y Raditz en los puntos investigados de BT2. Los encuentros de Piccolo y Kame House tienen combates y progreso guardado. El marcador final conecta con la pelea nativa; todavía hay que validar el recorrido completo y establecer las reglas definitivas de progresión.
+La exploración usa el mapa de Dragon Adventure de BT2, convertido a BT3 y escalado al doble de su tamaño original. Raditz aparece sobre el cráter de su cápsula, en la zona identificada en el mapa. Los personajes de misión se desbloquean en orden: Piccolo, Goku y Raditz. Los encuentros bloqueados no aparecen en el mapa. Los encuentros de Piccolo y Kame House tienen combates y progreso guardado. El marcador final conecta con la pelea nativa. El usuario confirmó el recorrido completo, los desbloqueos, los resultados, el guardado y el regreso al mapa.
 
-Adventure se abre desde el despachador de la misión antes de `Battle_Main` y tiene un ciclo de actualización y dibujo propio. En la versión compatible, el cargador de `src/adventure/adventure_loader.cpp` reproduce la preparación necesaria para un solo personaje y su descarga, sin ejecutar el trabajo inicial del cargador de combate. Las peleas siguen usando su carga original. Se reutilizan servicios y recursos internos de BT3 para archivos, guion, modelos, animaciones, sonido, escenario, cámara y efectos; por ello Adventure todavía depende del motor y de la estructura de esta versión del ejecutable. Si no puede instalarse el trabajo propio, existe una ruta de compatibilidad con el cargador nativo. Al salir se restaura la configuración de la misión. Véase [cargador propio de Adventure](docs/research/cargador-adventure.md).
+Adventure se abre desde el despachador de la misión antes de `Battle_Main` y tiene un ciclo de actualización y dibujo propio. En la versión compatible, el cargador de `src/adventure/adventure_loader.cpp` prepara y descarga los recursos del personaje jugable, el personaje de misión y, después de Kame House, del acompañante, sin ejecutar el trabajo inicial del cargador de combate. Las peleas siguen usando su carga original. Se reutilizan servicios y recursos internos de BT3 para archivos, guion, modelos, animaciones, sonido, escenario, cámara y efectos; por ello Adventure todavía depende del motor y de la estructura de esta versión del ejecutable. Si no puede instalarse el trabajo propio, existe una ruta de compatibilidad con el cargador nativo. Al salir se restaura la configuración de la misión. Véase [cargador propio de Adventure](docs/research/cargador-adventure.md).
+
+### Columnas de misión
+
+Los encuentros disponibles se señalan mediante columnas rojas. Al controlar a Raditz se muestran con el rastreador activado; al controlar a Goku se muestran directamente. Cuadrado confirma el destino más cercano dentro de una zona horizontal amplia, a cualquier altura; el personaje se aproxima volando y la pantalla se oscurece antes de la transición. Los modelos de personajes existentes permanecen visibles. Las columnas usan geometría 3D dibujada mediante funciones del motor; todavía conviene verificar su apariencia y oclusión en distintas situaciones.
+
+Los archivos locales `mission-column.bin` y `mission-fade.bin` se pueden regenerar con `python tools/map-conversion/build_mission_effects.py external/local-only/DBZBT3R/piccolo-marker.bin external/local-only/DBZBT3R`.
+
+### Selector de personajes
+
+Mantén **Círculo** durante Adventure para mostrar el selector. Usa izquierda/derecha en la cruceta o el joystick izquierdo para elegir, y suelta Círculo para confirmar. Al inicio solo está disponible Raditz; después de Kame House se puede alternar entre Raditz y Goku acompañado por Piccolo. Si no cambias la selección, no se recarga la escena. Cambiar de personaje recarga Adventure conservando la posición y las victorias.
+
+Las texturas locales se regeneran con `python tools/map-conversion/build_character_selector.py assets/ui/character-selector external/local-only/DBZBT3R/piccolo-marker.bin external/local-only/DBZBT3R`.
+
+### Panel de administración
+
+Durante Adventure, pulsa **F8** para abrir o cerrar el panel. Usa **arriba/abajo** para elegir un acto y **espacio** para marcarlo o desmarcarlo. Los cambios se guardan en el progreso de DBZBT3R y recargan brevemente Adventure conservando la posición. Marcar Kame House también completa Piccolo; desmarcar Piccolo desmarca Kame House, para mantener el orden de la historia. El panel funciona con el teclado mientras la ventana del juego tiene el foco.
 
 ### Funciones implementadas
 
-- Cinemática MP4 de llegada de Raditz; Enter permite omitirla.
 - Lanzador que salta las presentaciones del juego y abre directamente el menú configurado.
 - Mapa de la Tierra de BT2 navegable, con versiones locales para Blender y glTF.
 - Raditz como personaje controlable en el tramo de exploración y punto de aparición sobre el cráter de su cápsula.
 - Cámara de seguimiento y cambio de orientación durante el vuelo.
+- Piccolo con capa acompaña a Goku durante el tramo final e imita su vuelo y efectos, con la separación ajustada.
+- Minimapa de la Tierra con fondo transparente, flecha del personaje y puntos rojos para los encuentros disponibles. Con Raditz, los puntos se muestran al activar el rastreador.
+- Raditz puede activar el rastreador con Triángulo: muestra el filtro, el marco y el objetivo disponible al enfocarlo.
 - Tres velocidades: movimiento normal; movimiento rápido con dirección y botón X; y turbo mientras se mantiene L2. U ya no activa el turbo.
 - Animaciones nativas para el vuelo rápido, el turbo y subir o bajar; impulso inicial, líneas blancas y sonido de inicio para el vuelo rápido. El turbo usa sus propios efectos.
 - Malla de colisión inicial generada a partir de la geometría visible de la Tierra, consultada para el suelo, el movimiento y la cámara. El mar sin geometría usa un nivel provisional.
-- Iconos de Piccolo, Goku y Raditz en las posiciones de los marcadores de BT2, con posición suavizada. Los iconos se ocultan cuando el destino está detrás de la cámara.
-- Los marcadores permiten iniciar los combates de Piccolo contra Raditz y, después de ganar con Piccolo, de Raditz contra Goku en Kame House. Las victorias se guardan; los encuentros completados se pueden repetir. Tras ganar en Kame House se vuelve al mapa como Goku.
-- El marcador de Raditz permite confirmar el encuentro final y pasar a la pelea nativa. Por ahora puede activarse aunque no se hayan completado los encuentros anteriores.
-- Cinemáticas locales antes y después de ganar los encuentros de Piccolo y Kame House, cuando están disponibles los archivos correspondientes.
+- Los encuentros disponibles se señalan con columnas 3D. Los personajes visibles en Adventure usan por ahora posturas y animaciones del juego.
+- Al acercarse a los personajes y confirmar se pueden iniciar los combates de Piccolo contra Raditz y, después de ganar con Piccolo, de Raditz contra Goku en Kame House. Las victorias se guardan. Piccolo y Kame House pueden repetirse al controlar a Raditz; tras ganar en Kame House se vuelve como Goku y ambos encuentros anteriores dejan de estar disponibles mientras se controla al equipo de Goku.
+- Raditz permite confirmar el encuentro final y pasar a la pelea nativa. Se desbloquea después de ganar el combate de Kame House.
 - Desactivación del desenfoque de distancia heredado por el mapa y de partículas de clima de la plantilla que seguían a la cámara.
 
 ### Qué se ha comprobado y qué falta probar
 
-Se ha visto a Raditz aparecer sobre el cráter y volar en Adventure. Se comprobaron las tres velocidades, las líneas de movimiento y el cambio del marcador mediante pruebas aisladas; la sensación de vuelo, el sonido y la estabilidad del icono deben seguir evaluándose al jugar.
+El usuario consideró completados los objetivos anteriores de Adventure y del rastreador. Posteriormente se sustituyeron los iconos por personajes en el mundo y se reactivó el rastreador para Raditz.
 
-Una prueba con Raditz en Adventure y el punto de aparición anterior llegó a la escena de combate nativa con Goku. **Aún queda repetir el recorrido completo desde el nuevo punto de aparición**, confirmar el destino y comprobar la pelea y sus efectos. La colisión existe, pero necesita una revisión manual del terreno, los edificios, la vegetación, los huecos y el agua. El desenfoque de distancia se corrigió; la posible pérdida de claridad durante el movimiento rápido sigue por evaluar por separado.
+El usuario confirmó el recorrido anterior con indicadores, los resultados, el guardado y el regreso al mapa. La nueva presentación con personajes requiere una prueba completa en juego; las transiciones se comprobaron mediante llegadas forzadas en pruebas aisladas.
 
-## Objetivos
+## Objetivos y misiones
 
-Las casillas marcadas indican que existe una primera implementación o investigación concreta. Las tareas de pulido y validación de esa implementación aparecen por separado para que puedan tacharse cuando se completen.
+Los sistemas compartidos, su estado y sus pruebas pendientes están en [Objetivos generales de Adventure](docs/adventure/objetivos.md). La ruta progresiva, los combates y las cinemáticas previstas de cada episodio se mantienen por separado; el primer documento es [Misión de Raditz](historia/Dragon%20Ball%20Z/mision-raditz.md).
 
-### Base de Adventure y estabilidad
-
-- [x] Reproducir una cinemática de llegada de Raditz antes de la exploración y permitir omitirla con Enter.
-- [x] Extraer y convertir el mapa de la Tierra de BT2 para usarlo en el prototipo.
-- [x] Preparar versiones del mapa para inspeccionarlo en Blender y glTF.
-- [x] Saltar las presentaciones y llegar más rápido al menú del juego desde el lanzador.
-- [x] Iniciar el ciclo de Adventure antes de `Battle_Init` y devolver después el control al inicio de la pelea.
-- [x] Controlar a Raditz durante el primer tramo de exploración.
-- [x] Colocar el punto de aparición sobre el cráter de la cápsula de Raditz.
-- [x] Implementar movimiento y orientación del personaje en el mapa.
-- [x] Implementar las tres velocidades de vuelo, sus animaciones y el impulso inicial del vuelo rápido.
-- [x] Añadir animaciones al subir y bajar durante la exploración.
-- [x] Añadir líneas de movimiento y sonido de inicio al vuelo rápido.
-- [x] Crear una primera malla de colisión del suelo y los objetos a partir del mapa visible.
-- [x] Reemplazar el indicador C por un icono de Raditz y suavizar su movimiento.
-- [x] Probar la confirmación de un destino y su conexión con la misión nativa de Raditz en la versión anterior.
-- [x] Localizar en BT2 y mostrar los puntos de Piccolo, Kame House y el encuentro final con Raditz.
-- [x] Conectar la confirmación del marcador de Raditz con la pelea nativa.
-- [ ] Ajustar la disponibilidad del encuentro final a la progresión definitiva de la historia.
-- [x] Corregir el desenfoque de distancia heredado por el mapa de Adventure.
-- [x] Investigar y documentar el flujo de historia, mapa y eventos de BT2 con las fuentes disponibles.
-- [ ] Repetir la ruta completa desde el nuevo punto de aparición hasta la pelea y comprobar la restauración de la misión.
-- [ ] Probar y ajustar el vuelo, el giro, la cámara, las animaciones y los sonidos en condiciones normales de juego.
-- [ ] Revisar y corregir las colisiones del terreno, edificios, vegetación, agua y límites del mapa.
-- [ ] Evaluar y corregir el deterioro visual que aún pueda ocurrir durante el vuelo rápido.
-- [ ] Profundizar en el código de BT2 para recuperar los detalles de vuelo, cámara, llegada a destinos y gestión del mundo que todavía no se conocen.
-- [x] Preparar un cargador propio de Adventure para los recursos de un solo personaje.
-- [ ] Mantener y adaptar el cargador propio cuando cambie la versión del motor o sus funciones internas.
-- [ ] Añadir el minimapa de BT2 con la posición del personaje y los indicadores correspondientes.
-
-### Saga saiyajin: episodio de Raditz
-
-- [ ] Investigar la visión del rastreador de Shin Budokai como referencia.
-- [ ] Implementar la activación del rastreador y la primera detección, dirigida al encuentro con Piccolo.
-- [x] Añadir una cinemática antes del combate de Raditz contra Piccolo.
-- [x] Añadir el combate de Piccolo controlable contra Raditz y volver al mapa como Raditz.
-- [x] Guardar la victoria contra Raditz y permitir reintentar el encuentro si Piccolo pierde.
-- [x] Reproducir una cinemática después de ganar ese combate y regresar al mapa navegable.
-- [ ] Revelar el indicador de Goku mediante el rastreador solo después de completar la pelea contra Piccolo.
-- [x] Dirigir a Raditz hacia Kame House y reproducir la cinemática antes del combate.
-- [x] Añadir el combate de Raditz controlable contra Goku en el escenario de Kame House y guardar la victoria.
-- [x] Regresar al mapa como Goku tras ganar en Kame House.
-- [ ] Probar manualmente el combate de Kame House, su resultado y el regreso al mapa.
-- [x] Reproducir la escena posterior a la victoria en Kame House y regresar al mapa.
-- [ ] Comenzar el tramo final sobre Kame House con Goku controlable y Piccolo a su lado.
-- [x] Mostrar a Raditz como objetivo y conectar su marcador con la pelea nativa de BT3.
-- [ ] Vincular la disponibilidad del encuentro final al progreso de la historia.
-- [ ] Reproducir la cinemática de la muerte de Raditz y de Piccolo llevándose a Gohan.
-- [ ] Rehacer el combate final para incluir a Goku y Piccolo contra Raditz y la intervención de Gohan.
-
-### Objetivos posteriores
-
-- [ ] Desarrollar las demás sagas, empezando por el resto de Dragon Ball Z.
-- [ ] Buscar y adaptar un mapa de Namek de otro juego.
-- [ ] Ampliar el modo historia a Dragon Ball clásico, GT y Super.
-- [ ] Sustituir progresivamente los fragmentos del anime por escenas creadas con el motor del juego.
-- [ ] Rehacer los combates necesarios para representar mejor los acontecimientos de cada saga.
-- [ ] A largo plazo, reemplazar modelos 3D de personajes, habilidades y escenarios.
-
-## Diseño previsto: llegada de Raditz
-
-1. Reproducir la llegada de la cápsula y abrir el mapa con minimapa; Raditz aparece junto al lugar de impacto.
-2. El jugador activa el rastreador. La primera detección conduce a Piccolo, donde una cinemática da paso a un combate nuevo entre Raditz y Piccolo.
-3. Tras el combate y otra cinemática, regresar al mapa. Al usar de nuevo el rastreador se revela a Goku y el trayecto hacia Kame House.
-4. Reproducir la llegada a Kame House, disputar un combate nuevo entre Raditz y Goku y mostrar a Raditz marchándose.
-5. Regresar al mapa sobre Kame House con Goku y Piccolo. El indicador de Raditz conduce al combate nativo de BT3, que más adelante se rehacerá para incluir la lucha conjunta y la intervención de Gohan.
-6. Después de la muerte de Raditz, mostrar su muerte y a Piccolo llevándose a Gohan. Con eso termina el episodio.
-
-**Regla de progresión:** el indicador de Goku no debe aparecer antes de que el jugador haya usado el rastreador y completado el combate contra Piccolo. Actualmente los tres indicadores permanecen visibles para pruebas, pero el combate de Kame House solo se puede activar después de ganar con Piccolo. Al ganar con Raditz, el progreso se guarda y se vuelve al mapa como Goku. El rastreador y Piccolo como acompañante todavía están pendientes. El combate final nativo está conectado, pero su marcador aún puede activarse antes de completar los encuentros anteriores.
+Las cinemáticas anteriores se retiraron del flujo del mod. Las escenas futuras figuran como objetivos en el documento de la misión correspondiente.
 
 ## Línea de tiempo
 
@@ -125,7 +74,9 @@ Las casillas marcadas indican que existe una primera implementación o investiga
 9. Se sustituyó el marcador C por un icono de Raditz, se añadió confirmación al destino y se ajustó su comportamiento cuando queda detrás de la cámara.
 10. Se cambió el personaje controlable a Raditz y se ubicó su aparición sobre el cráter señalado.
 11. Se añadieron los encuentros de Piccolo y Kame House, sus cinemáticas y el guardado de victorias; después de Kame House se vuelve al mapa como Goku.
-12. Se separó el ciclo de Adventure de la ejecución de la pelea y se implementó un cargador propio para los recursos de un solo personaje. Queda validar el recorrido completo jugando.
+12. Se separó el ciclo de Adventure de la ejecución de la pelea y se implementó un cargador propio para los recursos de un solo personaje.
+13. El usuario completó y verificó la ruta de Raditz, los desbloqueos, el guardado y las transiciones entre peleas y mapa.
+14. Se sustituyeron los iconos flotantes por personajes de misión en el mundo y se recuperó el rastreador para Raditz. Esta versión necesita validación completa durante el juego.
 
 ## Referencias de diseño
 
@@ -135,16 +86,16 @@ Las casillas marcadas indican que existe una primera implementación o investiga
 - Dragon Ball: Raging Blast 2.
 - Dragon Ball FighterZ.
 - Dragon Ball: Sparking! ZERO.
-- Shin Budokai, como referencia para el rastreador.
+- Dragon Ball Xenoverse 2, como referencia para el rastreador.
 
-El informe [Dragon Adventure de BT2: arquitectura aprovechable](docs/research/BT2-Dragon-Adventure-arquitectura.md) documenta el flujo que pudo estudiarse y las partes del código original que seguían sin ser legibles en la copia examinada. La [investigación de cámara y vuelo](docs/research/BT2-Dragon-Adventure-camera-flight.md) es una referencia histórica, no una descripción actualizada de todos los controles del prototipo. La [investigación del minimapa](docs/research/minimapa-bt2.md) registra lo que falta para incorporarlo.
+El informe [Dragon Adventure de BT2: arquitectura aprovechable](docs/research/BT2-Dragon-Adventure-arquitectura.md) documenta el flujo que pudo estudiarse y las partes del código original que seguían sin ser legibles en la copia examinada. La [investigación de cámara y vuelo](docs/research/BT2-Dragon-Adventure-camera-flight.md) es una referencia histórica, no una descripción actualizada de todos los controles del prototipo. La [investigación del minimapa](docs/research/minimapa-bt2.md) documenta la conversión entre coordenadas del mundo y píxeles de la imagen y lo que falta para incorporarlo.
 
 ## Estructura del repositorio
 
-- `src/adventure/`: cinemática, ciclo de Adventure, controles, colisión y direcciones de funciones utilizadas por el prototipo.
+- `src/adventure/`: entrada de misión, ciclo de Adventure, controles, colisión y direcciones de funciones utilizadas por el prototipo.
 - `scripts/build-dbzbt3r.cmd`: compilación de la DLL con MSVC.
 - `assets/maps/earth/`: documentación y recursos locales del mapa de la Tierra.
-- `assets/ui/`: imágenes fuente de los marcadores de Piccolo, Goku y Raditz.
+- `assets/ui/`: imagen fuente del minimapa, marcadores y referencias gráficas del rastreador. El marco final del rastreador se renderiza como una textura transparente de 512×448, dividida en celdas nativas de 64×64.
 - `tools/map-conversion/`: herramientas de conversión, exportación y generación de colisión y marcador.
 - `docs/`: manual de traspaso e investigaciones. El manual conserva pasos de una fase anterior; contrástalo con este estado y con el código antes de aplicarlo.
 - `external/local-only/`: instalación y recursos locales excluidos de Git.
@@ -163,7 +114,7 @@ La DLL se genera en `build/DBZBT3R.dll` y, si existe el paquete local, se copia 
 
 El progreso de este encuentro se guarda por separado de la partida original en `external/local-only/DBZBT3R/saves/dbzbt3r-progress.ini`. Se registran por separado las victorias de Piccolo y de Kame House; una derrota o salida sin victoria no completa el encuentro correspondiente.
 
-Además de la instalación local de Tenkaichi3Decomp, el paquete necesita `earth-adventure-map.unk`, `earth-collision.bin`, `raditz-marker.bin`, `piccolo-marker.bin`, `goku-marker.bin` y, para la cinemática, `saiyan-pod-landing.mp4`. Las instrucciones para generar la colisión y el marcador están en [tools/map-conversion/README.md](tools/map-conversion/README.md). Un clon del repositorio no incluye por sí solo todos los archivos necesarios para jugar.
+Además de la instalación local de Tenkaichi3Decomp, el paquete necesita `earth-adventure-map.unk`, `earth-collision.bin`, `raditz-marker.bin`, `piccolo-marker.bin`, `goku-marker.bin`, `scouter-triangles.bin`, `scouter-filter.bin`, las texturas de las celdas ocupadas de la cuadrícula 8×7 (índices del 00 al 55), generadas desde la imagen 512×448. Las instrucciones para generar la colisión y el marcador están en [tools/map-conversion/README.md](tools/map-conversion/README.md). Un clon del repositorio no incluye por sí solo todos los archivos necesarios para jugar.
 
 ## Recursos locales y Git
 
@@ -172,13 +123,4 @@ Las ISO, el video, los ejecutables, las partidas, los mapas extraídos y los bin
 Las posiciones y la evidencia de los marcadores se describen en [marcadores-saga-saiyajin-bt2.md](docs/research/marcadores-saga-saiyajin-bt2.md).
 
 
-### Cinemáticas locales de los encuentros
-
-Los vídeos se guardan en `external/local-only/DBZBT3R/cinematics/` y no se suben a GitHub. Se pueden saltar con Enter. Para cada encuentro, el archivo terminado en `-0.mp4` se reproduce antes de la pelea y el que tenga el número positivo más alto se reproduce después de ganar. Los números intermedios quedan reservados para futuros eventos dentro del combate; actualmente no se reproducen.
-
-- Piccolo: `RadditzvsPiccolo-0.mp4` y `RadditzvsPiccolo-1.mp4`.
-- Kame House: `GokuvsRadditz-0.mp4` y `GokuvsRadditz-1.mp4`.
-
-Si se pierde o abandona la pelea, no se reproduce la escena de victoria y se puede reintentar.
-
-Los encuentros de Piccolo y Kame House pueden repetirse desde sus marcadores con Enter/Start, sin borrar las victorias guardadas. El límite de tiempo es de 40 segundos para Piccolo y 90 segundos para Kame House. Tras agotar el tiempo, el juego nativo determina el resultado.
+Los encuentros de Piccolo y Kame House pueden repetirse en sus ubicaciones al controlar a Raditz, siempre que estén desbloqueados. Ni Piccolo ni Kame House se pueden iniciar mientras se controla a Goku con Piccolo. El límite de tiempo es de 40 segundos para Piccolo y 90 segundos para Kame House. Tras agotar el tiempo, el juego nativo determina el resultado.

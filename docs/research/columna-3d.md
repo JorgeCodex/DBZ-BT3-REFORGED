@@ -1,0 +1,13 @@
+# Columna 3D de misiones: preparación
+
+El modelo fuente está en `assets/models/mission-column/`: Blender, GLB, textura PNG y nota del autor. El GLB es glTF 2.0 válido, con 16 vértices y 8 triángulos, cuatro planos cruzados, altura 5 y ancho 0,6 en sus unidades. Su origen está en la base; en glTF el eje vertical es Y. El PNG está embebido y también se entrega separado. El material usa transparencia BLEND y doble cara.
+
+Adventure todavía no usa este modelo. La columna actual es una proyección 2D por tramos y mantiene problemas de perspectiva y oclusión. No debe describirse como geometría 3D.
+
+El código fuente local `work/bt3-source/src/battle/eft_a.c` de la investigación contiene `EftGfx_DrawPolyAvgZ`, que recorta un triángulo y lo envía a `EftPrim_DrawTriangle` con profundidad. La estructura de vértice está definida en `include/battle/eft_a.h`: posición, color y UV, vectores alineados de 16 bytes. Esta es una posible vía para representar los cuatro planos, Su símbolo COFF está presente en el ejecutable local v0.1.39.6 y se identificó en RVA 0x8acd0. La variante EftGfx_DrawPolyAvgZFront está en 0x8b180. Estos valores son específicos de ese ejecutable. Se probó en una copia aislada el envío de los ocho triángulos, cargando la textura en memoria gráfica y usando la matriz world2screen; los triángulos pasaron las cinco pruebas de recorte y el juego siguió ejecutándose, pero la columna no apareció. Tampoco apareció forzando la variante de primer plano. Quedan por identificar y validar el estado de renderizado, la textura y el orden de dibujo. Las direcciones PS2 del árbol fuente no son RVAs del ejecutable Windows: no deben usarse como tales.
+
+Para completar la integración: comprobar por qué no aparece la geometría en el experimento aislado, construir un adaptador que lea o convierta la malla y su textura, validar profundidad/transparencia en una copia aislada desde varias distancias y ángulos, y solo entonces reemplazar `DrawColumns`. Mantener la activación cilíndrica, desbloqueos, animación y fundido. El modelo necesita una escala de mundo por definir y conversión del eje vertical glTF al eje vertical de BT3; la coordenada Y del mundo actual crece hacia abajo. No se ha modificado la DLL ni las partidas.
+
+## Prueba posterior
+
+La estructura de vértice correcta de ClipVtx_Set es posición, UV y color, en ese orden. Corregirlo permitió ver el modelo de planos cruzados en una prueba aislada usando EftGfx_DrawPolyAvgZ y la matriz world2screen. Se incorporó una primera implementación; falta verificar oclusión, transparencia, ambos personajes, todas las misiones y estabilidad en juego normal. El binario de textura mission-model.bin se genera desde columna_roja.png con build_raditz_marker.py.

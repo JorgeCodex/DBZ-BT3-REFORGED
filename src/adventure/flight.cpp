@@ -1,4 +1,3 @@
-void PlayEncounterVideo(const wchar_t* prefix, bool ending);
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -13,6 +12,7 @@ void PlayEncounterVideo(const wchar_t* prefix, bool ending);
 
 #include "bt3_runtime_addresses.h"
 #include "earth_collision.h"
+#include "adventure_loader.h"
 
 namespace {
 struct alignas(16) Vec {
@@ -63,6 +63,38 @@ enum class Encounter { None, Piccolo, KameHouse, RaditzFinal };
 Encounter confirmedEncounter = Encounter::None;
 bool piccoloWon = false;
 bool kameHouseWon = false;
+bool adminOpen = false;
+bool pauseOpen = false;
+int pauseFrames = 0;
+int pausePulseFrame = 0;
+int PauseRowX(int row) { return 56 - row * 5; }
+int PauseRowY(int row) {
+    // The lower entries enter first, followed by the rows above them.
+    const int target = 125 + row * 39;
+    const float t = std::clamp((pauseFrames - (3 - row) * 3) / 12.0f, 0.0f, 1.0f);
+    const float eased = 1.0f - (1.0f - t) * (1.0f - t);
+    return static_cast<int>(std::lround(-36.0f + (target + 36.0f) * eased));
+}
+int pauseChoice = 0;
+int pauseDestination = -1;
+int pauseNotice = -1;
+int pauseNoticeFrames = 0;
+bool adventureHudVisible = true;
+bool adventureGoku = false;
+bool characterMenuOpen = false;
+bool characterMenuChoice = false;
+// Completed encounters can be replayed only while controlling Raditz.
+bool MissionAvailable(int index) {
+    if (adventureGoku) return index == 2 && kameHouseWon;
+    if (index == 0) return true;
+    if (index == 1) return piccoloWon;
+    return false;
+}
+bool adminReload = false;
+int adminSelection = 0;
+void* worldTargetObject = nullptr;
+int worldTargetId = -1;
+int worldTargetKind = 0;
 bool resumeAtEncounter = false;
 Vec resumePosition;
 float resumeHeading = 0.0f;
@@ -78,6 +110,12 @@ bool LoadVictory(const wchar_t* key) {
     return ProgressPath(path) && GetPrivateProfileIntW(L"story", key, 0, path) == 1;
 }
 
+bool SetVictory(const wchar_t* key, bool value) {
+    if (!CreateDirectoryW(L"saves", nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+    wchar_t path[MAX_PATH];
+    return ProgressPath(path) && WritePrivateProfileStringW(L"story", key, value ? L"1" : L"0", path) != 0;
+}
+
 bool SaveVictory(const wchar_t* key) {
     if (!CreateDirectoryW(L"saves", nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
     wchar_t path[MAX_PATH];
@@ -85,11 +123,31 @@ bool SaveVictory(const wchar_t* key) {
 }
 // BT2 story marker IDs: 14 = Piccolo/Raditz encounter, 9 = Kame House.
 constexpr int MarkerCount = 3;
-void* markerResources[MarkerCount]{};
+constexpr int ScouterColumns = 8;
+constexpr int ScouterTileSize = 64;
+constexpr int ScouterTiles = 56;
+constexpr int MinimapTileCount = 16;
+constexpr int MinimapArrowCount = 32;
+constexpr int MinimapBase = MarkerCount + 2 + ScouterTiles;
+constexpr int ColumnBase = MinimapBase + MinimapTileCount + MinimapArrowCount;
+constexpr int FadeIndex = ColumnBase + MarkerCount;
+constexpr int MissionDotBase = FadeIndex + 1;
+constexpr int SelectorBase = MissionDotBase + MarkerCount;
+constexpr int SelectorHighlight = SelectorBase + 32;
+constexpr int ScouterReticleBase = SelectorHighlight + 1;
+constexpr int PauseBase = ScouterReticleBase + 6;
+constexpr int PauseBars = PauseBase + 56;
+constexpr int PauseText = PauseBars + 8;
+constexpr int PauseIcons = PauseText + 32;
+constexpr int ResourceCount = PauseIcons + 20;
+void* markerResources[ResourceCount]{};
 struct MarkerSprite {
     int flags, x0, y0, x1, y1, u0, v0, u1, v1, texture, r, g, b, a;
 };
 MarkerSprite* markerSprites = nullptr;
+MarkerSprite* pauseSprites = nullptr;
+constexpr int ColumnSections = 12;
+MarkerSprite* columnSprites = nullptr;
 
 bool LoadMarkerResource(int index, const char* path) {
     FILE* f = nullptr;
@@ -115,14 +173,66 @@ bool LoadMarkerResource(int index, const char* path) {
 }
 
 void LoadMarkers() {
-    markerSprites = Game<MarkerSprite*>(rva::Port_LowAlloc, MarkerCount * 2 * sizeof(MarkerSprite));
+    markerSprites = Game<MarkerSprite*>(rva::Port_LowAlloc, ResourceCount * 2 * sizeof(MarkerSprite));
+    pauseSprites = Game<MarkerSprite*>(rva::Port_LowAlloc, 72 * sizeof(MarkerSprite));
+    columnSprites = Game<MarkerSprite*>(rva::Port_LowAlloc, MarkerCount * ColumnSections * 2 * sizeof(MarkerSprite));
     const char* paths[MarkerCount] = {"piccolo-marker.bin", "goku-marker.bin", "raditz-marker.bin"};
     for (int i = 0; i < MarkerCount; ++i) {
         if (!LoadMarkerResource(i, paths[i])) FlightLog("Story marker resource unavailable", i);
     }
+    if (!LoadMarkerResource(MarkerCount, "scouter-triangles.bin")) FlightLog("Scouter marker resource unavailable");
+    if (!LoadMarkerResource(MarkerCount + 1, "scouter-filter.bin")) FlightLog("Scouter filter resource unavailable");
+    for (int tile = 0; tile < MinimapTileCount; ++tile) {
+        char path[32]; std::snprintf(path, sizeof(path), "minimap-%02d.bin", tile);
+        if (!LoadMarkerResource(MinimapBase + tile, path)) FlightLog("Minimap tile unavailable", tile);
+    }
+    for (int direction = 0; direction < MinimapArrowCount; ++direction) {
+        char path[32]; std::snprintf(path, sizeof(path), "minimap-arrow-%d.bin", direction);
+        if (!LoadMarkerResource(MinimapBase + MinimapTileCount + direction, path)) FlightLog("Minimap arrow unavailable", direction);
+    }
+    for (int i = 0; i < MarkerCount; ++i)
+        if (!LoadMarkerResource(ColumnBase + i, "mission-model.bin")) FlightLog("Mission column resource unavailable", i);
+    for (int i = 0; i < MarkerCount; ++i)
+        if (!LoadMarkerResource(MissionDotBase + i, "minimap-mission-dot.bin")) FlightLog("Minimap mission dot unavailable", i);
+    for (int i = 0; i < 32; ++i) {
+        char path[48]; std::snprintf(path, sizeof(path), "selector-%s-%02d.bin", i < 16 ? "raditz" : "team", i % 16);
+        if (!LoadMarkerResource(SelectorBase + i, path)) FlightLog("Selector texture unavailable", i);
+    }
+    for (int row = 0; row < 4; ++row) for (int frame = 0; frame < (row == 2 ? 4 : 5); ++frame) {
+        char path[32]; std::snprintf(path, sizeof(path), "pause-icon-%d-%d.bin", row, frame);
+        if (!LoadMarkerResource(PauseIcons + row * 5 + frame, path)) FlightLog("Pause icon unavailable", row * 5 + frame);
+    }
+    if (!LoadMarkerResource(SelectorHighlight, "selector-highlight.bin")) FlightLog("Selector highlight unavailable");
+    const char* reticles[3] = {"scouter-reticle-right.bin", "scouter-reticle-left.bin", "scouter-reticle-up.bin"};
+    for (int i = 0; i < 6; ++i)
+        if (!LoadMarkerResource(ScouterReticleBase + i, reticles[i % 3])) FlightLog("Scouter triangle unavailable", i);
+
+    for (int i = 0; i < 15; ++i) {
+        char path[40]; std::snprintf(path, sizeof(path), "pause-goku-%02d.bin", i);
+        if (!LoadMarkerResource(PauseBase + i, path)) FlightLog("Pause Goku unavailable", i);
+    }
+    for (int i = 0; i < 8; ++i) {
+        char path[40]; std::snprintf(path, sizeof(path), "pause-%s-%02d.bin", i < 4 ? "normal" : "selected", i % 4);
+        if (!LoadMarkerResource(PauseBars + i, path)) FlightLog("Pause bar unavailable", i);
+    }
+    for (int i = 0; i < 32; ++i) {
+        char path[48];
+        std::snprintf(path, sizeof(path), "pause-text-%s-%d-%d.bin", i < 16 ? "normal" : "selected", (i % 16) / 4, i % 4);
+        if (!LoadMarkerResource(PauseText + i, path)) FlightLog("Pause text unavailable", i);
+    }
+
+    if (!LoadMarkerResource(FadeIndex, "mission-fade.bin")) FlightLog("Mission fade resource unavailable");
+    for (int tile = 0; tile < ScouterTiles; ++tile) {
+        char path[32]; std::snprintf(path, sizeof(path), "scouter-frame-%02d.bin", tile);
+        if (!LoadMarkerResource(MarkerCount + 2 + tile, path)) FlightLog("Scouter frame tile unavailable", tile);
+    }
 }
 
 void FreeMarkers() {
+    if (pauseSprites) Game(rva::Port_LowFree, pauseSprites);
+    pauseSprites = nullptr;
+    if (columnSprites) Game(rva::Port_LowFree, columnSprites);
+    columnSprites = nullptr;
     for (auto& resource : markerResources) {
         if (resource) Game(rva::Port_LowFree, resource);
         resource = nullptr;
@@ -174,8 +284,12 @@ constexpr std::uint32_t Left = 1 << 0;
 constexpr std::uint32_t Right = 1 << 1;
 constexpr std::uint32_t Down = 1 << 2;
 constexpr std::uint32_t Up = 1 << 3;
+constexpr std::uint32_t Circle = 1 << 8;
 constexpr std::uint32_t Cross = 1 << 9;
+constexpr std::uint32_t Triangle = 1 << 10;
+constexpr std::uint32_t Square = 1 << 11;
 constexpr std::uint32_t Start = 1 << 12;
+constexpr std::uint32_t L1 = 1 << 14;
 constexpr std::uint32_t L2 = 1 << 15;
 constexpr std::uint32_t Ascend = 1 << 16;
 constexpr std::uint32_t Descend = 1 << 17;
@@ -204,6 +318,9 @@ struct Pilot {
     float markerX[MarkerCount]{};
     float markerY[MarkerCount]{};
     bool markerVisible[MarkerCount]{};
+    bool scouterActive = false;
+    Vec arrivalStart;
+    Vec arrivalTarget;
     bool arrived = false;   // reached the destination and locked the flight controls
     int arriveFrames = 0;
 };
@@ -221,8 +338,8 @@ constexpr int DragonDashStart = 0x2D;
 constexpr int DragonDashLoop = 0x19;
 constexpr int AscendMotion = 0x2B;
 constexpr int DescendMotion = 0x2C;
-constexpr float ArrivalRadius = 65.0f;
-constexpr int ArrivalFrames = 90;
+constexpr float ArrivalRadius = 180.0f;
+constexpr int ArrivalFrames = 45;
 
 // Same rule as BtlMove_TurnModelYaw: step = |delta| * rate, clamped, never overshooting.
 float TurnToward(float current, float target, float rate, float minStep, float maxStep) {
@@ -350,16 +467,41 @@ float Move(Pilot& pilot, void* pad) {
     const bool selPressed = (held & Select) && !(lastHeld & Select);
     lastHeld = held;
 
-    if (pilot.arrived) return GroundY(pilot.position.x, pilot.position.z, pilot.floor);
+    if (pilot.arrived) {
+        const float t = std::clamp(pilot.arriveFrames / 35.0f, 0.0f, 1.0f);
+        const float ease = t * t * (3.0f - 2.0f * t);
+        const Vec previous = pilot.position;
+        pilot.position = {pilot.arrivalStart.x + (pilot.arrivalTarget.x - pilot.arrivalStart.x) * ease,
+                          pilot.arrivalStart.y + (pilot.arrivalTarget.y - pilot.arrivalStart.y) * ease,
+                          pilot.arrivalStart.z + (pilot.arrivalTarget.z - pilot.arrivalStart.z) * ease};
+        pilot.velocity = {pilot.position.x - previous.x, pilot.position.y - previous.y, pilot.position.z - previous.z, 0};
+        if (std::hypot(pilot.velocity.x, pilot.velocity.z) > 0.01f) {
+            pilot.heading = std::atan2(pilot.arrivalTarget.x - pilot.position.x, pilot.arrivalTarget.z - pilot.position.z);
+            pilot.modelYaw = TurnToward(pilot.modelYaw, pilot.heading, 0.3f, 0.0314f, Deg36);
+        }
+        pilot.fastFlight = t < 0.92f;
+        return GroundY(pilot.position.x, pilot.position.z, pilot.floor);
+    }
 
     const auto pressed = Field<std::uint32_t>(pad, 0x18C);
-    const float piccoloDistance = Distance(pilot.position, pilot.markerGoals[0]);
-    const float raditzDistance = Distance(pilot.position, pilot.markerGoals[2]);
+    if (!adventureGoku && (pressed & Triangle)) {
+        pilot.scouterActive = !pilot.scouterActive;
+        FlightLog(pilot.scouterActive ? "Scouter enabled" : "Scouter disabled");
+    }
+    const float piccoloDistance = std::hypot(pilot.position.x - pilot.markerGoals[0].x, pilot.position.z - pilot.markerGoals[0].z);
+    const float raditzDistance = std::hypot(pilot.position.x - pilot.markerGoals[2].x, pilot.position.z - pilot.markerGoals[2].z);
     const float kameDistance = std::hypot(pilot.position.x - pilot.markerGoals[1].x, pilot.position.z - pilot.markerGoals[1].z);
-    if ((pressed & Start) && (raditzDistance < ArrivalRadius || piccoloDistance < ArrivalRadius || (piccoloWon && kameDistance < ArrivalRadius))) {
-        confirmedEncounter = raditzDistance < ArrivalRadius ? Encounter::RaditzFinal :
-                             piccoloDistance < ArrivalRadius ? Encounter::Piccolo : Encounter::KameHouse;
+    Encounter nearest = Encounter::None;
+    float nearestDistance = ArrivalRadius;
+    if (MissionAvailable(0) && piccoloDistance < nearestDistance) { nearest = Encounter::Piccolo; nearestDistance = piccoloDistance; }
+    if (MissionAvailable(1) && kameDistance < nearestDistance) { nearest = Encounter::KameHouse; nearestDistance = kameDistance; }
+    if (MissionAvailable(2) && raditzDistance < nearestDistance) { nearest = Encounter::RaditzFinal; nearestDistance = raditzDistance; }
+    if ((pressed & Square) && nearest != Encounter::None) {
+        confirmedEncounter = nearest;
         pilot.arrived = true;
+        pilot.arrivalStart = pilot.position;
+        pilot.arrivalTarget = pilot.markerGoals[confirmedEncounter == Encounter::Piccolo ? 0 : confirmedEncounter == Encounter::KameHouse ? 1 : 2];
+        pilot.arrivalTarget.y = GroundY(pilot.arrivalTarget.x, pilot.arrivalTarget.z, pilot.floor) - 18.0f;
         pilot.boosting = false;
         pilot.fastFlight = false;
         pilot.velocity = {0, 0, 0, 0};
@@ -389,10 +531,7 @@ float Move(Pilot& pilot, void* pad) {
     pilot.heading = std::remainder(pilot.heading, Tau);
     pilot.modelYaw = TurnToward(pilot.modelYaw, pilot.heading, 0.3f, 0.0314f, Deg36);
 
-    // Cycle camera distance preset with SELECT (BT2 ChrCam_UpdateInput).
-    if (selPressed) {
-        pilot.cameraDistMode = (pilot.cameraDistMode + 1) % 3;
-    }
+    if (selPressed) adventureHudVisible = !adventureHudVisible;
 
     const float sine = std::sin(pilot.modelYaw);
     const float cosine = std::cos(pilot.modelYaw);
@@ -523,56 +662,383 @@ void UpdateDashEffects(Pilot& pilot, void* fighter) {
     Game(rva::BtlScene_PostUpdate);
 }
 
+// The port saves the F1 aspect selection in this file. Refresh periodically so
+// changing the setting during Adventure also updates the frame layout.
+float ScouterAspectScale() {
+    static int ticks = 0;
+    static float scale = 1.0f;
+    if (ticks++ % 30 == 0) {
+        FILE* file = nullptr;
+        if (fopen_s(&file, "bt3_settings.txt", "r") == 0) {
+            char line[256]; int aspect = 0;
+            while (std::fgets(line, sizeof(line), file)) {
+                if (sscanf_s(line, "aspect_milli=%d", &aspect) == 1) break;
+            }
+            std::fclose(file);
+            scale = std::clamp(aspect / 1333.333f, 1.0f, 3.0f);
+        }
+    }
+    return scale;
+}
+
+// Keyboard-only development panel. Edge detection survives a scene reload.
+bool AdminPressed(int key, bool& previous) {
+    DWORD owner = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &owner);
+    const bool down = owner == GetCurrentProcessId() && (GetAsyncKeyState(key) & 0x8000) != 0;
+    const bool pressed = down && !previous;
+    previous = down;
+    return pressed;
+}
+
+void UpdateAdminPanel() {
+    static bool f8 = false, up = false, down = false, space = false;
+    const bool toggle = AdminPressed(VK_F8, f8);
+    const bool selectUp = AdminPressed(VK_UP, up);
+    const bool selectDown = AdminPressed(VK_DOWN, down);
+    const bool change = AdminPressed(VK_SPACE, space);
+    if (toggle) adminOpen = !adminOpen;
+    if (!adminOpen) return;
+    if (selectUp || selectDown) adminSelection = 1 - adminSelection;
+    if (!change) return;
+    bool newPiccolo = piccoloWon, newKame = kameHouseWon;
+    if (adminSelection == 0) {
+        newPiccolo = !newPiccolo;
+        if (!newPiccolo) newKame = false;
+    } else {
+        newKame = !newKame;
+        if (newKame) newPiccolo = true;
+    }
+    // Restore the previous saved values on failure; never reload a half-written state.
+    if (!SetVictory(L"piccolo_victory", newPiccolo) || !SetVictory(L"kame_house_victory", newKame)) {
+        SetVictory(L"piccolo_victory", piccoloWon);
+        SetVictory(L"kame_house_victory", kameHouseWon);
+        FlightLog("Admin panel could not save progress");
+        return;
+    }
+    piccoloWon = newPiccolo;
+    kameHouseWon = newKame;
+    adventureGoku = newKame;
+    characterMenuOpen = false;
+    adminReload = true;
+    FlightLog("Admin panel updated progress", piccoloWon ? 1 : 0, kameHouseWon ? 1.0f : 0.0f);
+}
+
+struct alignas(16) MissionColumnVertex { Vec pos; Vec uv; Vec color; };
+void DrawColumns3D(Pilot& pilot) {
+    if (!(adventureGoku || pilot.scouterActive) || !markerResources[ColumnBase]) return;
+    static const float positions[] = {-0.30000001f,0.00000000f,0.00000000f,0.30000001f,0.00000000f,-0.00000000f,0.30000001f,5.00000000f,-0.00000000f,-0.30000001f,5.00000000f,0.00000000f,-0.21213204f,0.00000000f,0.21213204f,0.21213204f,0.00000000f,-0.21213204f,0.21213204f,5.00000000f,-0.21213204f,-0.21213204f,5.00000000f,0.21213204f,-0.00000000f,0.00000000f,0.30000001f,0.00000000f,0.00000000f,-0.30000001f,0.00000000f,5.00000000f,-0.30000001f,-0.00000000f,5.00000000f,0.30000001f,0.21213204f,0.00000000f,0.21213204f,-0.21213204f,0.00000000f,-0.21213204f,-0.21213204f,5.00000000f,-0.21213204f,0.21213204f,5.00000000f,0.21213204f};
+    static const float uvs[] = {0.00000000f,1.00000000f,1.00000000f,1.00000000f,1.00000000f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,1.00000000f,1.00000000f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,1.00000000f,1.00000000f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,1.00000000f,1.00000000f,0.00000000f,0.00000000f,0.00000000f};
+    static const unsigned short indices[] = {0,1,2,0,2,3,4,5,6,4,6,7,8,9,10,8,10,11,12,13,14,12,14,15};
+    auto* res = markerResources[ColumnBase];
+    const auto cbp = Field<std::int32_t>(res, 0x50) + 0x3040;
+    const auto tex = Field<std::uint64_t>(res, 0x70) | (static_cast<std::uint64_t>(cbp) << 37) | (std::uint64_t{4} << 32) | 0x3000;
+    Game(0x420c30, res, 0, 0x3000, cbp);
+    Game(0x414cb0);
+    const auto view = *reinterpret_cast<std::uint32_t*>(ImageBase() + rva::gBtlCamView);
+    if (!view) return;
+    Game(0x4063a0);
+    Game(0x406740, reinterpret_cast<void*>(static_cast<std::uintptr_t>(view) + 0x140));
+    for (int i=0;i<MarkerCount;++i) {
+        if (!MissionAvailable(i)) continue;
+        Vec base=pilot.markerGoals[i]; base.y=GroundY(base.x,base.z,pilot.floor);
+        for (int t=0;t<8;++t) {
+            MissionColumnVertex v[16]{};
+            for (int k=0;k<3;++k) {
+                const auto a=indices[t*3+k];
+                v[k].pos={base.x+positions[a*3]*50.0f,base.y-positions[a*3+1]*280.0f,base.z+positions[a*3+2]*50.0f,1.0f};
+                v[k].color={128.0f,128.0f,128.0f,128.0f};
+                v[k].uv={uvs[a*2],uvs[a*2+1],1.0f,1.0f};
+            }
+            Game(0x8acd0,v,1,0,0,0,tex,0);
+        }
+    }
+    Game(0x406460);
+}
+
+
 void DrawMarker(Pilot& pilot, char* label) {
     constexpr std::size_t labelSize = 112;
-    const float proximity = Distance(pilot.position, pilot.markerGoals[0]);
-    const float raditzDistance = Distance(pilot.position, pilot.markerGoals[2]);
+    const float proximity = std::hypot(pilot.position.x - pilot.markerGoals[0].x, pilot.position.z - pilot.markerGoals[0].z);
+    const float raditzDistance = std::hypot(pilot.position.x - pilot.markerGoals[2].x, pilot.position.z - pilot.markerGoals[2].z);
     const float kameDistance = std::hypot(pilot.position.x - pilot.markerGoals[1].x, pilot.position.z - pilot.markerGoals[1].z);
-    if (raditzDistance < ArrivalRadius) std::snprintf(label, labelSize, "RADITZ: ENTER / START PARA PELEAR");
-    else if (proximity < ArrivalRadius) std::snprintf(label, labelSize, piccoloWon ? "PICCOLO: ENTER / START PARA REPETIR" : "PICCOLO: ENTER / START PARA PELEAR");
-    else if (piccoloWon && kameDistance < ArrivalRadius) std::snprintf(label, labelSize, kameHouseWon ? "KAME HOUSE: ENTER / START PARA REPETIR" : "KAME HOUSE: ENTER / START PARA PELEAR");
-    else if (kameHouseWon) std::snprintf(label, labelSize, "KAME HOUSE COMPLETADO   PICCOLO: %d m   L2 TURBO", static_cast<int>(proximity));
-    else if (piccoloWon) std::snprintf(label, labelSize, "PICCOLO COMPLETADO   GOKU: %d m   L2 TURBO", static_cast<int>(kameDistance));
-    else std::snprintf(label, labelSize, "PICCOLO: %d m   GOKU: %d m   L2 TURBO", static_cast<int>(proximity), static_cast<int>(Distance(pilot.position, pilot.markerGoals[1])));
+    const bool nearPiccolo = !kameHouseWon && proximity < ArrivalRadius;
+    const bool nearKame = piccoloWon && !kameHouseWon && kameDistance < ArrivalRadius;
+    const bool nearRaditz = kameHouseWon && raditzDistance < ArrivalRadius;
+    if (nearRaditz && (!nearKame || raditzDistance <= kameDistance)) std::snprintf(label, labelSize, "RADITZ: CUADRADO PARA PELEAR");
+    else if (nearPiccolo && (!nearKame || proximity <= kameDistance)) std::snprintf(label, labelSize, piccoloWon ? "PICCOLO: CUADRADO PARA REPETIR" : "PICCOLO: CUADRADO PARA PELEAR");
+    else if (nearKame) std::snprintf(label, labelSize, kameHouseWon ? "KAME HOUSE: CUADRADO PARA REPETIR" : "KAME HOUSE: CUADRADO PARA PELEAR");
+    else if (kameHouseWon) std::snprintf(label, labelSize, "ENCUENTRA A RADITZ");
+    else if (piccoloWon) std::snprintf(label, labelSize, "ENCUENTRA A GOKU");
+    else std::snprintf(label, labelSize, "ENCUENTRA A PICCOLO");
     const auto color = Game<std::uint32_t>(rva::Font_GetColor);
     const auto scale = Game<std::uint32_t>(rva::Font_GetScale);
     const int enabled = Game<int>(rva::Font_IsEnabled);
     Game(rva::Font_SetEnabled, 1);
     Game(rva::Font_SetScale, AsWord(1.0f));
     Game(rva::Font_SetColor, 0x80FFFFFFu);
-    Game(rva::Font_PrintAsciiAt, 20, 19, label);
-
-    alignas(16) float screen[4][4];
-    Game(rva::Vu0Screen_StoreMtx, &screen[0][0]);
-    const char* names[MarkerCount] = {"P", "G", "R"};
-    for (int i = 0; i < MarkerCount; ++i) {
-        const Vec& goal = pilot.markerGoals[i];
+    if (!adventureGoku && pilot.scouterActive && markerResources[MarkerCount + 1] && markerSprites) {
+        auto* filter = markerSprites + (MarkerCount + 1) * 2;
+        // Match the opening of the frame; do not tint the area outside it.
+        // The short strips approximate the clipped corners and the top-left notch.
+        const float aspect = ScouterAspectScale();
+        const auto lensX = [aspect](float px) {
+            const float cropped = -6.0f + px * 518.0f / 512.0f;
+            return static_cast<int>(std::lround(256.0f + (cropped - 256.0f) * aspect));
+        };
+        struct LensStrip { int x1, y1, x2, y2; };
+        constexpr LensStrip strips[] = {
+            {130, 50, 488, 63}, {47, 63, 497, 72},
+            {32, 72, 497, 399}, {32, 399, 490, 409}
+        };
+        for (const auto& strip : strips) {
+            filter[0] = {1, lensX(static_cast<float>(strip.x1)), strip.y1,
+                         lensX(static_cast<float>(strip.x2)), strip.y2,
+                         0, 0, 64, 64, 0, 128, 128, 128, 128};
+            filter[1] = {}; filter[1].flags = 2;
+            Game(rva::Sprite_DrawList, markerResources[MarkerCount + 1], 0, 0, filter);
+        }
+    }
+    if (!adventureGoku && pilot.scouterActive && markerSprites) {
+        // Detect every available Raditz encounter independently.
+        for (int targetIndex = 0; targetIndex < 2; ++targetIndex) {
+        if (!MissionAvailable(targetIndex)) continue;
+        Vec goal = pilot.markerGoals[targetIndex];
+        goal.y = GroundY(goal.x, goal.z, pilot.floor) - 10.0f;
+        alignas(16) float screen[4][4];
+        Game(rva::Vu0Screen_StoreMtx, &screen[0][0]);
         const auto dot = [&](int col) {
             return goal.x * screen[0][col] + goal.y * screen[1][col] + goal.z * screen[2][col] + screen[3][col];
         };
         const float depth = dot(3);
-        if (!std::isfinite(depth) || depth <= 1.0f) { pilot.markerVisible[i] = false; continue; }
-        const float targetX = dot(0) / depth - 1792.0f;
-        const float targetY = dot(1) / depth - 1824.0f;
-        if (!std::isfinite(targetX) || !std::isfinite(targetY)) { pilot.markerVisible[i] = false; continue; }
-        // Piccolo and Raditz both use marker 14 in BT2; offsets only separate their icons.
-        const float offset = i == 0 ? -25.0f : i == 2 ? 25.0f : 0.0f;
-        const float x = std::clamp(targetX + offset, 24.0f, 488.0f);
-        const float y = std::clamp(targetY, 52.0f, 410.0f);
-        if (!pilot.markerVisible[i]) { pilot.markerX[i] = x; pilot.markerY[i] = y; pilot.markerVisible[i] = true; }
-        else { pilot.markerX[i] += (x - pilot.markerX[i]) * 0.22f; pilot.markerY[i] += (y - pilot.markerY[i]) * 0.22f; }
-        const int sx = static_cast<int>(std::lround(pilot.markerX[i]));
-        const int sy = static_cast<int>(std::lround(pilot.markerY[i]));
-        if (markerResources[i] && markerSprites) {
-            auto* sprites = markerSprites + i * 2;
-            sprites[0] = {1, sx - 24, sy - 46, sx + 24, sy + 2, 0, 0, 64, 64, 0, 128, 128, 128, 128};
-            sprites[1] = {}; sprites[1].flags = 2;
-            Game(rva::Sprite_DrawList, markerResources[i], 0, 0, sprites);
-        } else {
-            char* fallback = label + labelSize;
-            std::snprintf(fallback, 16, "[%s]", names[i]);
-            Game(rva::Font_PrintAsciiAt, sx - 8, sy, fallback);
+        if (std::isfinite(depth) && depth > 1.0f) {
+            const float x = dot(0) / depth - 1792.0f;
+            const float y = dot(1) / depth - 1824.0f;
+            if (std::isfinite(x) && std::isfinite(y) && x >= 0 && x <= 512 && y >= 0 && y <= 448) {
+                const int sx = static_cast<int>(std::lround(x)), sy = static_cast<int>(std::lround(y));
+                const float aspect = ScouterAspectScale();
+                const int halfWidth = std::max(1, static_cast<int>(std::lround(8.0f / aspect)));
+                const int offsetX = static_cast<int>(std::lround(32.0f / aspect));
+                const int xs[3] = {sx - offsetX, sx + offsetX, sx};
+                const int ys[3] = {sy, sy, sy + 28};
+                for (int i = 0; i < 3; ++i) {
+                    const int id = ScouterReticleBase + targetIndex * 3 + i;
+                    if (!markerResources[id]) continue;
+                    auto* sprites = markerSprites + id * 2;
+                    sprites[0] = {1, xs[i] - halfWidth, ys[i] - 8, xs[i] + halfWidth, ys[i] + 8, 0, 0, 64, 64, 0, 128, 128, 128, 128};
+                    sprites[1] = {}; sprites[1].flags = 2;
+                    Game(rva::Sprite_DrawList, markerResources[id], 0, 0, sprites);
+                }
+                std::snprintf(label + 304, 32, "????");
+                Game(rva::Font_PrintAsciiAt, sx - 40, sy - 48, label + 304);
+            }
         }
+        }
+        for (int tile = 0; tile < ScouterTiles; ++tile) {
+            const int index = MarkerCount + 2 + tile;
+            if (!markerResources[index]) continue;
+            auto* sprite = markerSprites + index * 2;
+            const int x = (tile % ScouterColumns) * ScouterTileSize;
+            const int y = (tile / ScouterColumns) * ScouterTileSize;
+            const float aspect = ScouterAspectScale();
+            // Hide only the left outline of the grey housing, retaining its body.
+            // Keep the right edge anchored to its original position.
+            constexpr float leftCrop = 6.0f;
+            const auto frameX = [aspect, leftCrop](float px) {
+                const float cropped = -leftCrop + px * (512.0f + leftCrop) / 512.0f;
+                return static_cast<int>(std::lround(256.0f + (cropped - 256.0f) * aspect));
+            };
+            const int left = frameX(static_cast<float>(x));
+            const int right = frameX(static_cast<float>(x + ScouterTileSize));
+            sprite[0] = {1, left, y, right, y + ScouterTileSize, 0, 0, 64, 64, 0, 128, 128, 128, 128};
+            sprite[1] = {}; sprite[1].flags = 2;
+            Game(rva::Sprite_DrawList, markerResources[index], 0, 0, sprite);
+        }
+    }
+
+    // The map remains north-up. Its source is a 5200-unit orthographic view
+    // of the unscaled BT2 map; position is scaled by the actual world scale.
+    if (adventureHudVisible && markerSprites && earthScale > 0.0f) {
+        constexpr int mapX = 16, mapY = 304, mapSize = 128, tileSize = mapSize / 4;
+        for (int tile = 0; tile < MinimapTileCount; ++tile) {
+            const int id = MinimapBase + tile;
+            if (!markerResources[id]) continue;
+            auto* sprite = markerSprites + id * 2;
+            const int x = mapX + (tile % 4) * tileSize, y = mapY + (tile / 4) * tileSize;
+            sprite[0] = {1, x, y, x + tileSize, y + tileSize, 0, 0, 64, 64, 0, 128, 128, 128, 128};
+            sprite[1] = {}; sprite[1].flags = 2;
+            Game(rva::Sprite_DrawList, markerResources[id], 0, 0, sprite);
+        }
+        if (adventureGoku || pilot.scouterActive) {
+            for (int i = 0; i < MarkerCount; ++i) {
+                if (!MissionAvailable(i)) continue;
+                const int id = MissionDotBase + i;
+                if (!markerResources[id]) continue;
+                const float u = 0.5f + pilot.markerGoals[i].x / (5200.0f * earthScale);
+                const float v = 0.5f - pilot.markerGoals[i].z / (5200.0f * earthScale);
+                if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) continue;
+                const int x = mapX + static_cast<int>(std::lround(u * mapSize));
+                const int y = mapY + static_cast<int>(std::lround(v * mapSize));
+                auto* sprite = markerSprites + id * 2;
+                sprite[0] = {1, x - 4, y - 4, x + 4, y + 4, 0, 0, 64, 64, 0, 128, 128, 128, 128};
+                sprite[1] = {}; sprite[1].flags = 2;
+                Game(rva::Sprite_DrawList, markerResources[id], 0, 0, sprite);
+            }
+        }
+        const float u = 0.5f + pilot.position.x / (5200.0f * earthScale);
+        const float v = 0.5f - pilot.position.z / (5200.0f * earthScale);
+        if (u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f) {
+            const int sx = mapX + static_cast<int>(std::lround(u * mapSize));
+            const int sy = mapY + static_cast<int>(std::lround(v * mapSize));
+            int dir = static_cast<int>(std::lround(pilot.modelYaw * (MinimapArrowCount / 2.0f) / 3.14159265f));
+            dir = (dir % MinimapArrowCount + MinimapArrowCount) % MinimapArrowCount;
+            const int id = MinimapBase + MinimapTileCount + dir;
+            if (markerResources[id]) {
+                auto* sprite = markerSprites + id * 2;
+                sprite[0] = {1, sx - 7, sy - 7, sx + 7, sy + 7, 0, 0, 64, 64, 0, 128, 128, 128, 128};
+                sprite[1] = {}; sprite[1].flags = 2;
+                Game(rva::Sprite_DrawList, markerResources[id], 0, 0, sprite);
+            }
+        }
+    }
+    if (characterMenuOpen && markerSprites) {
+        const int base = SelectorBase + (kameHouseWon ? 16 : 0);
+        const int left = 352, top = 270, size = 144, tileSize = size / 4;
+        for (int i = 0; i < 16; ++i) {
+            const int id = base + i; if (!markerResources[id]) continue;
+            const int x = left + (i % 4) * tileSize, y = top + (i / 4) * tileSize;
+            auto* sprite = markerSprites + id * 2;
+            sprite[0] = {1,x,y,x+tileSize,y+tileSize,0,0,64,64,0,128,128,128,128};
+            sprite[1] = {}; sprite[1].flags = 2;
+            Game(rva::Sprite_DrawList, markerResources[id], 0, 0, sprite);
+        }
+        if (markerResources[SelectorHighlight]) {
+            const int x = left + (characterMenuChoice ? 72 : 0) + 3, y = top + 39;
+            auto* sprite = markerSprites + SelectorHighlight * 2;
+            sprite[0] = {1,x,y,x+66,y+66,0,0,64,64,0,128,128,128,128};
+            sprite[1] = {}; sprite[1].flags = 2;
+            Game(rva::Sprite_DrawList, markerResources[SelectorHighlight], 0, 0, sprite);
+        }
+    }
+    if (pauseOpen) {
+        if (markerSprites) {
+            if (markerResources[FadeIndex]) {
+                auto* shade = markerSprites + FadeIndex * 2;
+                const int alpha = std::min(pauseFrames * 6, 72);
+                shade[0] = {1,0,0,512,448,0,0,64,64,0,128,128,128,alpha};
+                shade[1] = {}; shade[1].flags = 2;
+                Game(rva::Sprite_DrawList, markerResources[FadeIndex], 0, 0, shade);
+            }
+            for (int i = 0; i < 15; ++i) {
+                const int id = PauseBase + i;
+                if (!markerResources[id]) continue;
+                auto* sprite = markerSprites + id * 2;
+                const float t = std::clamp(pauseFrames / 15.0f, 0.0f, 1.0f);
+                const float eased = 1.0f - (1.0f - t) * (1.0f - t);
+                // Portrait content occupies x=16..176 within its 192px canvas.
+                // Start outside the left edge and finish flush with the right.
+                const int origin = static_cast<int>(std::lround(-176.0f + 512.0f * eased));
+                const int x = origin + (i % 3) * 64;
+                const int y = 128 + (i / 3) * 64;
+                sprite[0] = {1,x,y,x+64,y+64,0,0,64,64,0,128,128,128,128};
+                sprite[1] = {}; sprite[1].flags = 2;
+                Game(rva::Sprite_DrawList, markerResources[id], 0, 0, sprite);
+            }
+            if (pauseSprites) for (int row = 0; row < 4; ++row) for (int tile = 0; tile < 4; ++tile) {
+                const int elapsed = pauseFrames - (3 - row) * 3;
+                if (elapsed <= 0) continue;
+                if (pauseFrames >= 25 && row == pauseChoice) continue;
+                const int id = PauseBars + tile;
+                if (!markerResources[id]) continue;
+                auto* sprite = pauseSprites + (row * 4 + tile) * 2;
+                // Match the slim unselected strips in the original menu.
+                const int x = PauseRowX(row) + tile * 240 / 4, y = PauseRowY(row) + 6;
+                const int right = PauseRowX(row) + (tile + 1) * 240 / 4;
+                const int alpha = std::clamp(elapsed * 16, 0, 128);
+                sprite[0] = {1,x,y,right,y+22,0,0,64,64,0,128,128,128,alpha};
+                sprite[1] = {}; sprite[1].flags = 2;
+                Game(rva::Sprite_DrawList, markerResources[id], 0, 0, sprite);
+            }
+            // The selected bar begins at the left edge of the viewport.
+            if (pauseSprites && pauseFrames >= 25) {
+                const int width = 388; // Approximately 25% wider than 310.
+                for (int tile = 0; tile < 4; ++tile) {
+                    const int left = width * tile / 4, right = width * (tile + 1) / 4;
+                    const int id = PauseBars + 4 + tile;
+                    if (!markerResources[id]) continue;
+                    auto* sprite = pauseSprites + 32 + tile * 2;
+                    const int y = PauseRowY(pauseChoice);
+                    sprite[0] = {1,left,y,right,y+34,0,0,64,64,0,128,128,128,128};
+                    sprite[1] = {}; sprite[1].flags = 2;
+                    Game(rva::Sprite_DrawList, markerResources[id], 0, 0, sprite);
+                }
+            }
+            if (pauseSprites) for (int row = 0; row < 4; ++row) {
+                const int elapsed = pauseFrames - (3 - row) * 3;
+                if (elapsed <= 0) continue;
+                const bool selected = pauseFrames >= 25 && row == pauseChoice;
+                const int iconFrame = (pausePulseFrame / 6) % (row == 2 ? 4 : 5);
+                const int iconId = PauseIcons + row * 5 + iconFrame;
+                if (markerResources[iconId]) {
+                    auto* icon = markerSprites + iconId * 2;
+                    const int size = selected ? 44 : 34;
+                    const int x = PauseRowX(row) - 4 - (size - 34) / 2;
+                    const int y = PauseRowY(row) - 1 - (size - 34) / 2;
+                    icon[0] = {1,x,y,x+size,y+size,0,0,64,64,0,128,128,128,std::clamp(elapsed * 16, 0, 128)};
+                    icon[1] = {}; icon[1].flags = 2;
+                    Game(rva::Sprite_DrawList, markerResources[iconId], 0, 0, icon);
+                }
+                const int textWidth = selected ? 220 : 200;
+                const int textHeight = selected
+                    ? 56 + static_cast<int>(std::lround(5.0f * std::sin(pausePulseFrame * 0.22f)))
+                    : 50;
+                for (int tile = 0; tile < 4; ++tile) {
+                    const int id = PauseText + (selected ? 16 : 0) + row * 4 + tile;
+                    if (!markerResources[id]) continue;
+                    auto* sprite = pauseSprites + 40 + (row * 4 + tile) * 2;
+                    const int left = PauseRowX(row) + 32 + tile * textWidth / 4;
+                    const int right = PauseRowX(row) + 32 + (tile + 1) * textWidth / 4;
+                    const int y = PauseRowY(row) + 17 - textHeight / 2;
+                    const int alpha = std::clamp(elapsed * 16, 0, 128);
+                    sprite[0] = {1,left,y,right,y+textHeight,0,0,64,64,0,128,128,128,alpha};
+                    sprite[1] = {}; sprite[1].flags = 2;
+                    Game(rva::Sprite_DrawList, markerResources[id], 0, 0, sprite);
+                }
+            }
+        }
+        char* description = label + 368;
+        char* title = label + 448;
+        const char* descriptions[] = {"CONTINUA LA PARTIDA", "REGRESA A LA SELECCION DE MISION", "REGRESA A LA SELECCION DE SAGA", "REGRESA AL MENU PRINCIPAL"};
+        std::snprintf(description, 80, "%s", descriptions[pauseChoice]);
+        std::snprintf(title, 32, "PAUSA");
+        Game(rva::Font_SetColor, 0x80FFFFFFu);
+        Game(rva::Font_SetScale, AsWord(0.8f));
+        Game(rva::Font_PrintAsciiAt, 30, 65, title);
+        if (pauseFrames >= 25) {
+            Game(rva::Font_SetScale, AsWord(0.6f));
+            Game(rva::Font_PrintAsciiAt, 30, 350, description);
+        }
+    }
+    if (adminOpen) {
+        // Text is kept in low memory until the native font queue is flushed.
+        char* header = label + 112;
+        char* row1 = label + 176;
+        char* row2 = label + 240;
+        std::snprintf(header, 64, "ADMIN F8: CERRAR  ARRIBA/ABAJO: ELEGIR  ESPACIO: CAMBIAR");
+        std::snprintf(row1, 64, "%s [%c] PICCOLO VS RADITZ", adminSelection == 0 ? ">" : " ", piccoloWon ? 'X' : ' ');
+        std::snprintf(row2, 64, "%s [%c] RADITZ VS GOKU", adminSelection == 1 ? ">" : " ", kameHouseWon ? 'X' : ' ');
+        Game(rva::Font_SetColor, 0x80FFFFFFu);
+        Game(rva::Font_SetScale, AsWord(0.7f));
+        Game(rva::Font_PrintAsciiAt, 20, 55, header);
+        Game(rva::Font_PrintAsciiAt, 20, 80, row1);
+        Game(rva::Font_PrintAsciiAt, 20, 104, row2);
+    }
+    if (pilot.arrived && pilot.arriveFrames >= 15 && markerSprites && markerResources[FadeIndex]) {
+        const int alpha = std::clamp((pilot.arriveFrames - 15) * 128 / 25, 0, 128);
+        auto* sprite = markerSprites + FadeIndex * 2;
+        sprite[0] = {1, 0, 0, 512, 448, 0, 0, 64, 64, 0, 128, 128, 128, alpha};
+        sprite[1] = {}; sprite[1].flags = 2;
+        Game(rva::Sprite_DrawList, markerResources[FadeIndex], 0, 0, sprite);
     }
     Game(rva::Font_FlushAll);
     Game(rva::Font_SetEnabled, enabled);
@@ -588,10 +1054,12 @@ void Draw(Pilot& pilot, char* overlayText) {
     Game(rva::Gfx_MarkPass, 3);
     Game(rva::StgFx_DrawPre);
     Game(rva::Gfx_MarkPass, 2);
+
     Game(rva::BtlObjDraw_Draw);
     Game(rva::Gfx_MarkPass, 4);
     Game(rva::Gfx_AddDefaultEnv);
     Game(rva::BtlScene_Draw, 1);
+    DrawColumns3D(pilot);
     Game(rva::Ot_Draw);
     Game(rva::Gfx_MarkPass, 3);
     Game(rva::StgFx_DrawPost);
@@ -623,13 +1091,11 @@ bool AdventureCycle(bool singleActor) {
     pilot.goal = { 806.0f * earthScale, 0.0f, 278.0f * earthScale };
     pilot.markerGoals[0] = pilot.goal;
     pilot.markerGoals[1] = { 1452.0f * earthScale, 0.0f, -1218.0f * earthScale };
-    pilot.markerGoals[2] = pilot.goal;
+    // Position the final encounter in front of the pod, clear of its geometry.
+    pilot.markerGoals[2] = { 1352.0f * earthScale, 0.0f, 650.0f * earthScale };
     for (auto& marker : pilot.markerGoals) {
         marker.y = std::max(pilot.ceiling, GroundY(marker.x, marker.z, pilot.floor) - 45.0f);
     }
-    // The final Raditz encounter is above Piccolo at the same horizontal location.
-    // The engine's Y axis points down, so a smaller value means higher altitude.
-    pilot.markerGoals[2].y = std::max(pilot.ceiling, pilot.markerGoals[0].y - 180.0f);
     float highestGround = 0.0f;
     for (int sample = 0; sample <= 16; ++sample) {
         const float fraction = sample / 16.0f;
@@ -646,10 +1112,15 @@ bool AdventureCycle(bool singleActor) {
     if (!std::isfinite(headingToGoal)) return false;
     pilot.heading = pilot.modelYaw = resumeAtEncounter ? resumeHeading : headingToGoal;
 
-    auto* overlayText = Game<char*>(rva::Port_LowAlloc, std::size_t{128});
+    auto* overlayText = Game<char*>(rva::Port_LowAlloc, std::size_t{480});
     if (!overlayText) return false;
 
-    if (rival) Field<int>(rival, 8) = 0;
+    const bool hasNpc = !singleActor && adventure_loader::CompanionSlot() >= 0;
+    const bool hasCompanion = adventureGoku && hasNpc;
+    const bool showNpc = hasNpc && (adventureGoku || !piccoloWon);
+    if (rival) Field<int>(rival, 8) = showNpc ? 1 : 0;
+    Pilot follower = pilot; Pilot target;
+    bool companionGlow = false;
     Field<int>(avatar, 8) = 1;
     int& avatarNoAnim = Field<int>(avatar, 0xC70);
     avatarNoAnim = 0;
@@ -665,9 +1136,97 @@ bool AdventureCycle(bool singleActor) {
         Game(rva::Gfx_BeginFrame);
         Game(rva::Pad_Update);
         Game(rva::Snd_Update);
+        UpdateAdminPanel();
+        const auto menuHeld = Field<std::uint32_t>(pad, 0x188);
+        const auto pausePressed = Field<std::uint32_t>(pad, 0x18C);
+        if (!adminOpen && !characterMenuOpen && !pilot.arrived && (pausePressed & Start)) {
+            pauseOpen = !pauseOpen;
+            if (pauseOpen) { pauseChoice = 0; pauseFrames = 0; pausePulseFrame = 0; }
+            pauseNoticeFrames = 0;
+        }
+        const bool pauseWasOpen = pauseOpen;
+        if (pauseOpen) {
+            pauseFrames = std::min(pauseFrames + 1, 60);
+            pausePulseFrame = (pausePulseFrame + 1) % 1800;
+            if (pausePressed & Up) pauseChoice = (pauseChoice + 3) % 4;
+            if (pausePressed & Down) pauseChoice = (pauseChoice + 1) % 4;
+            if (pausePressed & Cross) {
+                pauseDestination = pauseChoice - 1; // Reanudar has no destination.
+                pauseNotice = pauseChoice;
+                pauseNoticeFrames = 0;
+                pauseOpen = false;
+                FlightLog("Pause destination requested", pauseChoice);
+            } else if (pausePressed & Circle) pauseOpen = false;
+        } else if (pauseNoticeFrames > 0) --pauseNoticeFrames;
+        if (!pauseOpen && !pauseWasOpen && !adminOpen && !pilot.arrived && (menuHeld & Circle)) {
+            if (!characterMenuOpen) { characterMenuOpen = true; characterMenuChoice = adventureGoku; }
+            const float horizontal = Field<float>(pad, 0x1A4);
+            if ((menuHeld & Left) || horizontal < -0.5f) characterMenuChoice = false;
+            if (kameHouseWon && ((menuHeld & Right) || horizontal > 0.5f)) characterMenuChoice = true;
+        } else if (characterMenuOpen) {
+            characterMenuOpen = false;
+            if (characterMenuChoice != adventureGoku && kameHouseWon) {
+                adventureGoku = characterMenuChoice;
+                adminReload = true;
+                FlightLog("Adventure character switched", adventureGoku ? 1 : 0);
+            }
+        }
+        if (adminReload) {
+            resumePosition = pilot.position;
+            resumeHeading = pilot.heading;
+            resumeAtEncounter = true;
+            break;
+        }
         const Vec previousPosition = pilot.position;
-        const float ground = Move(pilot, pad);
+        const float ground = (adminOpen || characterMenuOpen || pauseOpen) ? GroundY(pilot.position.x, pilot.position.z, pilot.floor) : Move(pilot, pad);
         SetPilotPose(pilot, fighter, avatar, ground);
+        if (opponent && rival && hasCompanion) {
+            const int previousMotion = follower.motion;
+            follower = pilot; follower.motion = previousMotion;
+            // Half of the player's collision width is its body radius.
+            const float bodyRadius = Field<float>(avatar, 0x1004);
+            const float behind = std::isfinite(bodyRadius) && bodyRadius > 0.0f && bodyRadius < 50.0f ? bodyRadius : 6.0f;
+            follower.position.x += 17.5f * std::cos(pilot.modelYaw) - behind * std::sin(pilot.modelYaw);
+            follower.position.z -= 17.5f * std::sin(pilot.modelYaw) + behind * std::cos(pilot.modelYaw);
+            SetPilotPose(follower, opponent, rival, ground);
+            if (frames == 1) FlightLog("Companion follows player");
+        }
+        if (opponent && rival && showNpc && !hasCompanion) {
+            target.position = piccoloWon ? pilot.markerGoals[1] : pilot.markerGoals[0];
+            target.position.y = GroundY(target.position.x, target.position.z, 0.0f);
+            target.heading = target.modelYaw = std::atan2(pilot.position.x - target.position.x, pilot.position.z - target.position.z);
+            SetPilotPose(target, opponent, rival, target.position.y);
+        }
+        // Keep the target alive throughout the Adventure session. Destroying
+        // and recreating replay Piccolo on distance crossings can corrupt his pose.
+        if (piccoloWon && adventure_loader::ReplayPiccoloSlot() >= 0) {
+            const int wanted = adventureGoku ? 2 : 1;
+            if (wanted != worldTargetKind) {
+                if (worldTargetId >= 0) Game<int>(0x69130, worldTargetId);
+                worldTargetObject = nullptr; worldTargetId = -1; worldTargetKind = 0;
+                const int slot = wanted == 1 ? adventure_loader::ReplayPiccoloSlot() : wanted == 2 ? adventure_loader::TargetSlot() : -1;
+                if (slot >= 0) {
+                    worldTargetId = Game<int>(0x691C0, slot);
+                    if (worldTargetId >= 0) worldTargetObject = Game<void*>(0x68FC0, worldTargetId);
+                    if (worldTargetObject) {
+                        Game(0x8930, worldTargetObject, 0, 0, 1);
+                        Field<int>(worldTargetObject, 0xC70) = 0;
+                        Field<float>(worldTargetObject, 0xA20) = 1.0f;
+                        worldTargetKind = wanted;
+                    }
+                }
+            }
+        }
+        if (worldTargetObject) {
+            Vec pos = worldTargetKind == 1 ? pilot.markerGoals[0] : pilot.markerGoals[2];
+            // Place the mission character at the map's ground height.
+            pos.y = GroundY(pos.x, pos.z, pilot.floor);
+            Vec rot{0, std::atan2(pilot.position.x - pos.x, pilot.position.z - pos.z), 0};
+            Field<Vec>(worldTargetObject, 0x950) = pos;
+            Field<Vec>(worldTargetObject, 0x960) = rot;
+            Field<std::uint32_t>(worldTargetObject, 0xA40) |= 2;
+            Game(rva::BtlObjXf_Update, worldTargetObject);
+        }
         // Native speed trails use actual per-frame displacement and travel direction.
         const Vec moved{pilot.position.x - previousPosition.x,
                         pilot.position.y - previousPosition.y,
@@ -680,6 +1239,8 @@ bool AdventureCycle(bool singleActor) {
         Game(rva::BtlStage_Update);
         Game(rva::BtlCam_SelectView, 0);
         Game(rva::BtlCam_UpdateView, 0);
+        if (rival && showNpc) { Field<std::uint32_t>(rival, 0xA40) |= 2; Field<int>(rival, 0xC70) = 0; Field<float>(rival, 0xA20) = 1.0f; }
+        if (rival && !showNpc) { Field<std::uint32_t>(rival, 0xA40) &= ~std::uint32_t{2}; Field<int>(rival, 8) = 0; }
         avatarFlags |= 2;  // BTL_OBJ_FLAG_VISIBLE
         avatarNoAnim = 0;
         Game(rva::BtlObj_UpdateAll);
@@ -688,11 +1249,21 @@ bool AdventureCycle(bool singleActor) {
         if (pilot.fastFlight && movedLength > 0.5f) {
             Game<int>(rva::EftSpdLine_SpawnBodyTrails, Field<int>(fighter, 0x0C));
         }
+        if (opponent && rival && hasCompanion && follower.fastFlight && movedLength > 0.5f)
+            Game<int>(rva::EftSpdLine_SpawnBodyTrails, Field<int>(opponent, 0x0C));
+        if (opponent && rival && hasCompanion) {
+            const bool dashLoop = follower.motion == DragonDashLoop;
+            if (dashLoop != companionGlow) {
+                companionGlow = dashLoop;
+                Game<int>(rva::EftGlow_Request, Field<int>(opponent, 0x0C), dashLoop ? 0 : 2);
+            }
+        }
         UpdateDashEffects(pilot, fighter);
         Draw(pilot, overlayText);
         Game(rva::Gfx_EndFrame, 2);
         Game(rva::Dma_Flush);
 
+        if (pauseDestination >= 0) break;
         const float remaining = Distance(pilot.position, pilot.goal);
         if (recorded && frames % 60 == 0 && frames <= 240) {
             FlightLog("Distance to goal", frames, remaining);
@@ -776,7 +1347,6 @@ static void UnloadAdventure(void* work, bool skippedBuffers, int unusedSide) {
     if (skippedCleanup) FlightLog("Adventure skipped unused-side buffer cleanup");
 }
 
-#include "adventure_loader.h"
 
 static bool RunAdventureOnce() {
     LoadMarkers();
@@ -810,7 +1380,7 @@ static bool RunAdventureOnce() {
     bool skippedOtherModel = false;
     bool skippedOtherBuffers = false;
     bool ownResourceJob = false;
-    int unusedBufferSide = kameHouseWon ? 1 : 0;
+    int unusedBufferSide = adventureGoku ? 1 : 0;
     if (ownActorLoad) {
         constexpr std::uintptr_t BtlObj_Init = 0x69B10;
         constexpr std::uintptr_t Gsc_InitDefault = 0x42E350;
@@ -822,7 +1392,7 @@ static bool RunAdventureOnce() {
         const auto commands = *reinterpret_cast<std::uintptr_t*>(ImageBase() + gBtlScriptCommands);
         Game(Gsc_InitDefault, reinterpret_cast<void*>(commands));
         Game(BtlScript_Init);
-        ownResourceJob = adventure_loader::Install(kameHouseWon);
+        ownResourceJob = adventure_loader::Install(adventureGoku, piccoloWon);
         if (!ownResourceJob) {
             FlightLog("Adventure own job unavailable; using native resource job");
             Game(BtlLoad_PushInitialJob);
@@ -862,15 +1432,29 @@ static bool RunAdventureOnce() {
     std::uint8_t tempSide[0x270];
     const int playerPad = Field<int>(side0, 0x204);
     const int playerControl = Field<int>(side0, 0x208);
-    if (!kameHouseWon) {
+    if (!adventureGoku) {
         std::memcpy(tempSide, side0, sizeof(tempSide));
         std::memcpy(side0, side1, sizeof(tempSide));
         std::memcpy(side1, tempSide, sizeof(tempSide));
         unusedBufferSide = 1 - unusedBufferSide;
     }
+    const bool companionEnabled = ownResourceJob &&
+                                  adventure_loader::CompanionSlot() >= 0 && adventure_loader::CompanionParam();
+    if (companionEnabled) {
+        const int storyGokuCostume = Field<int>(side1, 0x254);
+        std::memcpy(side1, side0, 0x270);
+        const int npc = adventureGoku || !piccoloWon ? 0x16 : 0;
+        const int costume = npc == 0x16 ? 1 : storyGokuCostume;
+        Field<int>(side1, 4) = npc; Field<int>(side1, 8) = costume;
+        Field<int>(side1, 0x250) = npc; Field<int>(side1, 0x254) = costume;
+        Field<int>(side1, 0x25C) = npc; Field<int>(side1, 0x260) = costume;
+        Field<std::uint32_t>(side1, 0x60) = adventure_loader::CompanionParam();
+        Field<int>(side1, 0x26C) = adventure_loader::CompanionSlot();
+        skippedOtherModel = false; FlightLog("Adventure second character setup");
+    }
     Field<int>(side0, 0x204) = playerPad;
     Field<int>(side0, 0x208) = playerControl;
-    FlightLog(kameHouseWon ? "Goku selected for Adventure" : "Raditz selected for Adventure", Field<int>(side0, 4));
+    FlightLog(adventureGoku ? "Goku selected for Adventure" : "Raditz selected for Adventure", Field<int>(side0, 4));
     const auto arena = std::exchange(StageResource(),
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(stage)));
 
@@ -885,7 +1469,7 @@ static bool RunAdventureOnce() {
     auto* countInstruction = reinterpret_cast<unsigned char*>(ImageBase() + 0x6CA8C);
     constexpr unsigned char expectedCount[] = {0xC7, 0x00, 0x02, 0x00, 0x00, 0x00};
     DWORD oldProtection = 0;
-    bool singleActor = std::memcmp(countInstruction, expectedCount, sizeof(expectedCount)) == 0 &&
+    bool singleActor = !companionEnabled && std::memcmp(countInstruction, expectedCount, sizeof(expectedCount)) == 0 &&
                        VirtualProtect(countInstruction, sizeof(expectedCount), PAGE_EXECUTE_READWRITE, &oldProtection);
     if (singleActor && !ownActorLoad) {
         constexpr std::uintptr_t BtlObj_Destroy = 0x69130;
@@ -899,7 +1483,7 @@ static bool RunAdventureOnce() {
     if (singleActor) {
         countInstruction[2] = 1;
         FlushInstructionCache(GetCurrentProcess(), countInstruction, sizeof(expectedCount));
-    } else FlightLog("Adventure single-actor setup unavailable; using compatibility mode");
+    } else FlightLog("Adventure using multiple actors or compatibility mode");
 
     if (ownActorLoad && skippedOtherModel && !singleActor) {
         FlightLog("Adventure cannot initialize one actor safely; stopping exploration");
@@ -917,12 +1501,24 @@ static bool RunAdventureOnce() {
         constexpr std::uintptr_t BtlObj_CreateChara = 0x691C0;
         Field<int>(side0, 0x268) = Game<int>(BtlObj_CreateChara, Field<int>(side0, 0x26C));
         if (!singleActor) Field<int>(side1, 0x268) = Game<int>(BtlObj_CreateChara, Field<int>(side1, 0x26C));
-        FlightLog(singleActor ? "Adventure created only its playable actor" : "Adventure created two compatibility actors");
+        FlightLog(singleActor ? "Adventure created only its playable actor" : "Adventure created two actors");
     }
     Game(rva::BtlChar_AllocAll, singleActor ? 1 : 2);
     Game(rva::BtlCam_Init);
     Game(rva::Ot_Init);
     Game(rva::BtlScene_Init, 0);
+    if (companionEnabled && adventureGoku && adventure_loader::TargetSlot() >= 0) {
+        const int id = Game<int>(0x691C0, adventure_loader::TargetSlot());
+        worldTargetId = id;
+        worldTargetKind = 2;
+        worldTargetObject = Game<void*>(0x68FC0, id);
+        if (worldTargetObject) {
+            Game(0x8930, worldTargetObject, 0, 0, 1);
+            Field<int>(worldTargetObject, 0xC70) = 0;
+            Field<float>(worldTargetObject, 0xA20) = 1.0f;
+            FlightLog("World Raditz target created", id);
+        }
+    }
     if (singleActor) {
         countInstruction[2] = 2;
         FlushInstructionCache(GetCurrentProcess(), countInstruction, sizeof(expectedCount));
@@ -935,6 +1531,7 @@ static bool RunAdventureOnce() {
     const bool arrived = AdventureCycle(singleActor);
     FreeMarkers();
 
+    worldTargetObject = nullptr; worldTargetId = -1; worldTargetKind = 0;
     Game(rva::BtlChar_FreeAll);
     Game(rva::BtlCam_Term);
     Game(rva::BtlScene_Term);
@@ -954,13 +1551,37 @@ static bool RunAdventureOnce() {
 bool RunRaditzAdventure() {
     piccoloWon = LoadVictory(L"piccolo_victory");
     kameHouseWon = piccoloWon && LoadVictory(L"kame_house_victory");
+    adventureGoku = kameHouseWon;
+    characterMenuOpen = false;
+    pauseDestination = -1;
+    pauseOpen = false;
     confirmedEncounter = Encounter::None;
     resumeAtEncounter = false;
     auto* work = Game<void*>(rva::Battle_GetWork);
     std::uint8_t original[0x1A00];
     std::memcpy(original, work, sizeof(original));
     bool startNativeBattle = false;
-    while (RunAdventureOnce()) {
+    for (;;) {
+        adminReload = false;
+        const bool arrived = RunAdventureOnce();
+        if (pauseDestination >= 0) {
+            // This executable's mission hook checks gProgress at RVA 0x64b490.
+            // Dragon History modes: episode list 7, saga select 6, main menu 4.
+            const auto progressSlot = *reinterpret_cast<std::uint32_t**>(ImageBase() + 0x64b490);
+            const auto raw = progressSlot ? *progressSlot : 0;
+            if (raw) {
+                auto* progress = reinterpret_cast<void*>(static_cast<std::uintptr_t>(raw));
+                const int modes[] = {7, 6, 4};
+                Field<int>(progress, 0x18) = modes[pauseDestination];
+                FlightLog("Pause requested menu mode", modes[pauseDestination]);
+            } else FlightLog("Pause failed: progress pointer unavailable");
+            break;
+        }
+        if (adminReload) {
+            confirmedEncounter = Encounter::None;
+            continue;
+        }
+        if (!arrived) break;
         if (confirmedEncounter == Encounter::RaditzFinal) {
             startNativeBattle = true;
             FlightLog("Adventure yielding to native Raditz story battle");
@@ -994,22 +1615,19 @@ bool RunRaditzAdventure() {
         } else {
         Field<int>(side0, 0) = 1;
         Field<int>(side0, 4) = PiccoloEarly;
-        Field<int>(side0, 8) = 0;
+        Field<int>(side0, 8) = 1;
         Field<int>(side0, 12) = 0;
         Field<int>(side0, 0x1F8) = 0;
         Field<int>(side0, 0x208) = 0;
         Field<int>(side0, 0x250) = PiccoloEarly;
-        Field<int>(side0, 0x254) = 0;
+        Field<int>(side0, 0x254) = 1;
         Field<int>(side0, 0x258) = 0;
         Field<int>(side0, 0x25C) = PiccoloEarly;
-        Field<int>(side0, 0x260) = 0;
+        Field<int>(side0, 0x260) = 1;
         Field<int>(side0, 0x264) = 0;
         Field<int>(side1, 0x208) = 2;
         FlightLog("Piccolo vs Raditz battle starting", PiccoloEarly);
         }
-        const wchar_t* videoPrefix = confirmedEncounter == Encounter::KameHouse ? L"GokuvsRadditz" : L"RadditzvsPiccolo";
-
-        PlayEncounterVideo(videoPrefix, false);
         // v0.1.39.6: the native clock uses this table of preset seconds.
         // Temporarily replace the 45-second preset with 40 and restore it afterwards.
         auto* timeLimits = reinterpret_cast<std::int16_t*>(ImageBase() + 0x4765C0);
@@ -1031,10 +1649,9 @@ bool RunRaditzAdventure() {
         const auto reason = Field<std::uint32_t>(work, 0x193C);
         FlightLog(confirmedEncounter == Encounter::KameHouse ? "Kame House battle result" : "Piccolo battle result", static_cast<int>(winner), static_cast<float>(reason));
         if ((winner & 0xFu) == 1u && !(reason & 0x18000u)) {
-            PlayEncounterVideo(videoPrefix, true);
-
             if (confirmedEncounter == Encounter::KameHouse) {
                 kameHouseWon = true;
+                adventureGoku = true;
                 if (!SaveVictory(L"kame_house_victory")) FlightLog("Unable to save Kame House victory");
                 else FlightLog("Kame House victory saved");
             } else {
@@ -1059,3 +1676,5 @@ extern "C" __declspec(dllexport) void RaditzInitStage() {
 extern "C" __declspec(dllexport) void RaditzBattleLoop() {
     Game(rva::Battle_Loop);
 }
+
+

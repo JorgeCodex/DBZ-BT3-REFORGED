@@ -42,3 +42,30 @@ Para generar también los marcadores de la vista de prueba:
 python tools/map-conversion/build_raditz_marker.py assets/ui/piccolo-icon.png external/local-only/DBZBT3R/earth-adventure-map.unk external/local-only/DBZBT3R/piccolo-marker.bin
 python tools/map-conversion/build_raditz_marker.py assets/ui/goku-icon.png external/local-only/DBZBT3R/earth-adventure-map.unk external/local-only/DBZBT3R/goku-marker.bin
 ```
+
+## Recursos del rastreador
+
+Con el mapa local convertido, generar las texturas del rastreador. El marco usa
+una imagen transparente de **512×448**, que se divide en celdas nativas de
+**64×64** (rejilla 8×7). Las celdas vacías se omiten; el código las deja
+transparentes. Así se conserva la resolución lógica del HUD sin estirar una
+textura pequeña sobre toda la pantalla.
+
+```powershell
+python tools/map-conversion/build_raditz_marker.py assets/ui/scouter-triangles-reference.png external/local-only/DBZBT3R/earth-adventure-map.unk external/local-only/DBZBT3R/scouter-triangles.bin
+python tools/map-conversion/build_scouter_frame.py external/local-only/DBZBT3R/earth-adventure-map.unk external/local-only/DBZBT3R
+```
+
+## Minimapa
+
+Genera las 16 secciones y las 32 orientaciones de la flecha en el paquete local:
+
+```powershell
+python tools/map-conversion/build_minimap.py external/local-only/DBZBT3R/earth-adventure-map.unk external/local-only/DBZBT3R
+```
+
+Para generar el punto rojo de misión del minimapa:
+
+```powershell
+python tools/map-conversion/build_raditz_marker.py assets/ui/minimap-mission-dot.png external/local-only/DBZBT3R/earth-adventure-map.unk external/local-only/DBZBT3R/minimap-mission-dot.bin
+```

@@ -6,7 +6,7 @@ El recorrido de carga de Adventure se reproduce en `src/adventure/adventure_load
 
 - Preparación de la cola y el trabajo inicial de carga, incluidos los pasos de preparación del guion de historia.
 - Solicitud de bancos de sonido compartidos, del escenario y de voz del personaje jugable.
-- Solicitud del modelo y los parámetros del personaje jugable, memoria de sus miembros y preparación de los datos del escenario. No se solicita el modelo, la voz ni los búferes del oponente.
+- Solicitud de modelos y parámetros para el personaje jugable y los personajes visibles de Adventure, y preparación de los datos del escenario. Estos actores no inician una pelea ni cargan las voces o búferes del oponente de combate. Los modelos adicionales reutilizan servicios de objetos y recursos del motor; algunos se crean y liberan al acercarse a un encuentro repetible.
 - Finalización del trabajo y liberación de los recursos que Adventure reservó. La configuración de la misión se restaura antes de regresar o iniciar una pelea.
 
 El código reproduce la secuencia del cargador descompilado de BT3, pero llama a servicios nativos para leer archivos, interpretar el guion, cargar modelos y sonido, administrar memoria y otros recursos. También utiliza estructuras y direcciones internas concretas de la versión 0.1.39.6. Por tanto, cambiar el ejecutable o esas funciones puede romper Adventure aunque su secuencia de carga sea propia. No es una implementación independiente del motor.

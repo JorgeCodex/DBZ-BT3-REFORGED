@@ -1,0 +1,7 @@
+Columna de misión roja
+
+Dimensiones en Blender: 0,60 unidades de ancho máximo por 5,00 unidades de alto. Cuatro planos verticales cruzados; 16 vértices y 8 triángulos.
+Eje vertical: Z en Blender; Y en el archivo GLB, según la convención glTF.
+Origen: centro de la base, en (0, 0, 0). La geometría comienza en el plano del suelo.
+Transparencia: textura RGBA con bordes y extremos suavizados, combinada con un material de doble cara. El GLB utiliza alphaMode BLEND; la textura también está incorporada en el GLB y empaquetada en el archivo de Blender. Se proporciona una copia PNG por separado.
+El material incluye emisión roja para conservar la intensidad visual. El brillo exterior y la apariencia final dependen del visor o motor de destino; no se incluye un efecto de posprocesado.
